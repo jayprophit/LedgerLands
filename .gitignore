@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vscode/
+.idea/
+.prisma/
+apps/web/.vite/
+apps/web/dist/
+apps/api/dist/
+packages/*/dist/
+postgres-data/

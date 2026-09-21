@@ -1,0 +1,26 @@
+{
+  "name": "@ledgerlands/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ledgerlands/aetherius-sdk": "0.1.0",
+    "@ledgerlands/game-engine": "0.1.0",
+    "@ledgerlands/shared-types": "0.1.0",
+    "fastify": "5.12.5",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsx": "4.23.15",
+    "vitest": "5.0.1"
+  }
+}

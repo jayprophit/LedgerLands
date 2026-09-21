@@ -1,0 +1,18 @@
+{
+  "applicationId": "com.aetherius.ledgerlands",
+  "policy": {
+    "default": "DENY",
+    "capabilities": {
+      "identity.profile.read": "ALLOW",
+      "app.storage.read": "ALLOW",
+      "app.storage.write": "ALLOW",
+      "notifications.publish": "ASK",
+      "search.publish": "ALLOW",
+      "genesis.assist": "ASK",
+      "agent_bridge.wallet.connect": "ASK",
+      "finance.transact": "DENY",
+      "wallet.withdraw": "DENY",
+      "wallet.deposit": "DENY"
+    }
+  }
+}

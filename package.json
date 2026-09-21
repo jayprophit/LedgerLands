@@ -1,0 +1,32 @@
+{
+  "name": "ledgerlands",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LedgerLands - Aetherius OS property-trading strategy and GameFi application",
+  "license": "UNLICENSED",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "concurrently -n api,web \"npm run dev -w @ledgerlands/api\" \"npm run dev -w @ledgerlands/web\"",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write .",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "verify": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "concurrently": "^9.2.1",
+    "prettier": "^3.6.2",
+    "prisma": "7.10.0",
+    "typescript": "^5.9.2",
+    "dotenv": "^17.2.2"
+  }
+}

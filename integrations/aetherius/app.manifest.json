@@ -1,0 +1,41 @@
+{
+  "id": "com.aetherius.ledgerlands",
+  "name": "LedgerLands",
+  "version": "0.1.0",
+  "description": "Property-trading strategy game and future GameFi application for Aetherius OS.",
+  "publisher": "jayprophit",
+  "entrypoint": "http://localhost:5173",
+  "healthEndpoint": "http://localhost:8787/health",
+  "capabilities": [
+    "game.match.create",
+    "game.match.join",
+    "game.match.play",
+    "game.match.spectate",
+    "profile.read",
+    "settings.read",
+    "settings.write",
+    "notifications.publish",
+    "storage.read",
+    "storage.write",
+    "search.publish"
+  ],
+  "requiredPermissions": [
+    "identity.profile.read",
+    "app.storage.read",
+    "app.storage.write"
+  ],
+  "optionalPermissions": [
+    "notifications.publish",
+    "search.publish",
+    "genesis.assist",
+    "agent_bridge.wallet.connect"
+  ],
+  "supportedPlatforms": ["aetherius", "web", "windows", "macos", "linux", "android", "ios"],
+  "integrationEndpoints": {
+    "api": "http://localhost:8787/api",
+    "websocket": "ws://localhost:8787/ws",
+    "health": "http://localhost:8787/health"
+  },
+  "category": "games",
+  "realValueFeaturesEnabled": false
+}

@@ -1,0 +1,297 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MatchStatus {
+  LOBBY
+  ACTIVE
+  SETTLING
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum BalanceKind {
+  PRACTICE
+  PROMOTIONAL
+  LOCKED
+  WITHDRAWABLE
+  STAKED
+  PENDING
+  TOURNAMENT_ESCROW
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum TournamentStatus {
+  DRAFT
+  REGISTRATION
+  LOCKED
+  ACTIVE
+  SETTLING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+  DISPUTED
+}
+
+model User {
+  id                String             @id @default(cuid())
+  displayName       String
+  email             String?            @unique
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  authIdentities    AuthIdentity[]
+  ledgerAccounts    LedgerAccount[]
+  matchPlayers      MatchPlayer[]
+  rankings          Ranking[]
+  questProgress     QuestProgress[]
+  nftInstances      NFTInstance[]       @relation("NFTCurrentOwner")
+  marketplaceSeller MarketplaceListing[] @relation("ListingSeller")
+  compliance        ComplianceProfile?
+  auditLogs         AuditLog[]
+}
+
+model AuthIdentity {
+  id          String   @id @default(cuid())
+  userId      String
+  provider    String
+  providerKey String
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerKey])
+  @@index([userId])
+}
+
+model LedgerAccount {
+  id        String       @id @default(cuid())
+  userId    String
+  kind      BalanceKind
+  currency  String
+  createdAt DateTime     @default(now())
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries   LedgerEntry[]
+
+  @@unique([userId, kind, currency])
+}
+
+model LedgerEntry {
+  id          String          @id @default(cuid())
+  accountId   String
+  direction   LedgerDirection
+  amount      BigInt
+  reference   String
+  matchId     String?
+  metadata    Json?
+  createdAt   DateTime        @default(now())
+  account     LedgerAccount   @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  match       Match?          @relation(fields: [matchId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, createdAt])
+  @@index([reference])
+}
+
+model Match {
+  id              String       @id @default(cuid())
+  status          MatchStatus  @default(LOBBY)
+  rulesetVersion  String
+  seedCommitment  String?
+  seedReveal      String?
+  stateRevision   Int          @default(0)
+  createdAt       DateTime     @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+  players         MatchPlayer[]
+  events          MatchEvent[]
+  ledgerEntries   LedgerEntry[]
+  tournamentRound TournamentRound?
+
+  @@index([status, createdAt])
+}
+
+model MatchPlayer {
+  id          String   @id @default(cuid())
+  matchId     String
+  userId      String?
+  seat        Int
+  displayName String
+  isBot       Boolean  @default(false)
+  joinedAt    DateTime @default(now())
+  finalPlace  Int?
+  match       Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([matchId, seat])
+  @@index([userId])
+}
+
+model MatchEvent {
+  id        String   @id @default(cuid())
+  matchId   String
+  revision  Int
+  type      String
+  actorId   String?
+  payload   Json
+  createdAt DateTime @default(now())
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, revision])
+  @@index([matchId, createdAt])
+}
+
+model Tournament {
+  id          String             @id @default(cuid())
+  name        String
+  status      TournamentStatus   @default(DRAFT)
+  mode        String
+  startsAt    DateTime?
+  createdAt   DateTime           @default(now())
+  entries     TournamentEntry[]
+  rounds      TournamentRound[]
+}
+
+model TournamentEntry {
+  id           String     @id @default(cuid())
+  tournamentId String
+  userId       String
+  seed         Int?
+  createdAt    DateTime   @default(now())
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, userId])
+}
+
+model TournamentRound {
+  id           String     @id @default(cuid())
+  tournamentId String
+  roundNumber  Int
+  matchId      String     @unique
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  match        Match      @relation(fields: [matchId], references: [id], onDelete: Restrict)
+
+  @@unique([tournamentId, roundNumber, matchId])
+}
+
+model Season {
+  id        String    @id @default(cuid())
+  name      String
+  startsAt  DateTime
+  endsAt    DateTime
+  rankings  Ranking[]
+}
+
+model Ranking {
+  id          String @id @default(cuid())
+  seasonId    String
+  userId      String
+  mode        String
+  rating      Int    @default(1500)
+  gamesPlayed Int    @default(0)
+  wins        Int    @default(0)
+  losses      Int    @default(0)
+  streak      Int    @default(0)
+  season      Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([seasonId, userId, mode])
+}
+
+model Quest {
+  id          String          @id @default(cuid())
+  code        String          @unique
+  title       String
+  description String
+  cadence     String
+  definition  Json
+  active      Boolean         @default(true)
+  progress    QuestProgress[]
+}
+
+model QuestProgress {
+  id        String   @id @default(cuid())
+  questId   String
+  userId    String
+  progress  Int      @default(0)
+  completed Boolean  @default(false)
+  resetAt   DateTime?
+  quest     Quest    @relation(fields: [questId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([questId, userId])
+}
+
+model NFTAsset {
+  id          String        @id @default(cuid())
+  assetKey    String        @unique
+  name        String
+  rarity      String
+  className   String
+  metadata    Json
+  instances   NFTInstance[]
+}
+
+model NFTInstance {
+  id             String    @id @default(cuid())
+  assetId        String
+  currentOwnerId String?
+  chain          String?
+  tokenContract  String?
+  tokenId        String?
+  mintedAt       DateTime?
+  asset          NFTAsset  @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  currentOwner   User?     @relation("NFTCurrentOwner", fields: [currentOwnerId], references: [id], onDelete: SetNull)
+  listings       MarketplaceListing[]
+
+  @@unique([chain, tokenContract, tokenId])
+}
+
+model MarketplaceListing {
+  id            String      @id @default(cuid())
+  nftInstanceId String
+  sellerId      String
+  currency      String
+  price         BigInt
+  status        String      @default("OPEN")
+  createdAt     DateTime    @default(now())
+  expiresAt     DateTime?
+  nftInstance   NFTInstance @relation(fields: [nftInstanceId], references: [id], onDelete: Restrict)
+  seller        User        @relation("ListingSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+}
+
+model ComplianceProfile {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  ageVerified      Boolean  @default(false)
+  identityStatus   String   @default("NOT_STARTED")
+  sanctionsStatus  String   @default("NOT_CHECKED")
+  jurisdiction     String?
+  restricted       Boolean  @default(true)
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  resource    String
+  resourceId  String?
+  decision    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt])
+  @@index([resource, resourceId])
+}

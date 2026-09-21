@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ledgerlands/shared-types": [
+        "packages/shared-types/dist/index.d.ts"
+      ],
+      "@ledgerlands/game-engine": [
+        "packages/game-engine/dist/index.d.ts"
+      ],
+      "@ledgerlands/aetherius-sdk": [
+        "packages/aetherius-sdk/dist/index.d.ts"
+      ]
+    }
+  }
+}

@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ledgerlands
+      POSTGRES_PASSWORD: ledgerlands
+      POSTGRES_DB: ledgerlands
+    ports:
+      - "5432:5432"
+    volumes:
+      - ledgerlands-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerlands -d ledgerlands"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      API_PORT: 8787
+      DATABASE_URL: postgresql://ledgerlands:ledgerlands@postgres:5432/ledgerlands?schema=public
+      CORS_ORIGIN: http://localhost:5173
+    ports:
+      - "8787:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      VITE_API_URL: http://localhost:8787
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  ledgerlands-postgres:
