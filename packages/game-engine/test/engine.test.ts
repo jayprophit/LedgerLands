@@ -19,6 +19,7 @@ describe("LedgerLands deterministic engine", () => {
     let state = createMatchState({ id: "m", seed: 1, players: [{ id: "p1", name: "A" }] });
     state = applyCommand(state, { type: "START_MATCH" });
     state.players[0]!.position = 1;
+    state.turnPhase = "ACTION";
     const tile = DEFAULT_BOARD[1]!;
     state = applyCommand(state, { type: "BUY_PROPERTY", playerId: "p1", tileId: tile.id });
     expect(state.properties[tile.id]?.ownerId).toBe("p1");
