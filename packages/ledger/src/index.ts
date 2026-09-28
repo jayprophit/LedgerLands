@@ -33,6 +33,7 @@ export type LedgerEntryType =
   | "quest_reward"
   | "login_reward"
   | "refund"
+  | "tournament"
   | "withdrawal"
   | "fee"
   | "adjustment";

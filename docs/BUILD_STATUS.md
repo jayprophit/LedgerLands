@@ -1,6 +1,6 @@
 # Build Status
 
-Updated: 2026-09-28 · Branch: `main` · Repo: LedgerLands Aetherius app.
+Updated: 2026-09-28 (second pass) · Branch: `main` · Repo: LedgerLands Aetherius app.
 
 ## Legend
 
@@ -69,10 +69,26 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 - Rate limiting/headers/auth hardening, dep triage (4 high advisories), E2E: NOT_STARTED
 - Release zip: IN_PROGRESS
 
+## Second pass (ledgerlands1.txt ingest — spec identical, no deltas)
+
+- `packages/match-store`: pluggable backends (memory + file JSONL, atomic writes),
+  deterministic rebuild from command log, snapshots, idempotent commandIds,
+  expectedRevision guards, resume tokens, events-since sync, lobby-timeout sweep,
+  hash-chained replay export: TESTED (6/6)
+- API rewired onto persistent store; new endpoints: events, replay, resume,
+  ranked report/leaderboard, tournament CRUD + bracket results: TESTED (7/7 API tests)
+- `packages/ranked` (Elo, placement window, tiers, leaderboard): TESTED (4/4)
+- `packages/tournaments` (single-elim, power-of-2 guard, idempotent entry/payout/refund): TESTED (3/3)
+- Web: property-swap trade picker, replay/dispute panel, ranked + tournament tabs: IMPLEMENTED
+- Totals: **53/53 tests PASS** · `npm run verify` PASS · live smoke PASS · sim 50/50 PASS
+- Docker daemon unresponsive here → Postgres wiring stays a documented LL-P2 remainder
+  (Prisma schema is the production target; file backend proves the event-sourced design).
+
 ## Known issues
 
-1. MatchStore is in-memory (no Postgres persistence yet); restart loses matches. Schema ready (LL-P2).
-2. Trade UI covers sats-only propose; property-swap propose via TXT/API works in engine but needs UI picker.
-3. No Playwright E2E yet; manual + smoke coverage only.
+1. File/memory backends only; Postgres wiring (Prisma) is the remaining LL-P2
+   item and needs a live DB (Docker daemon unresponsive here). Schema ready.
+2. Tournament brackets require power-of-2 entries (byes are a follow-up).
+3. No Playwright E2E yet; inject + smoke coverage only.
 4. `npm audit`: 4 high advisories untriaged.
 5. Web `select` styling minimal on some browsers; no reduced-motion toggle yet.

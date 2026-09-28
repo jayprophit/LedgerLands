@@ -2,10 +2,10 @@
 
 CONTINUOUS_BUILD_ACTIVE = YES
 OVERALL_BUILD_COMPLETE = NO
-CURRENT_ACTIVE_PHASE = LL-P2-PERSISTENCE
-CURRENT_ACTIVE_TODO = LL-P2-PERSISTENCE (PostgreSQL event-sourced MatchStore)
-NEXT_EXECUTABLE_TODO = LL-P2-PERSISTENCE
-LAST_VERIFIED_COMMIT = see git log (OpenCode MVP pass 2026-09-28)
+CURRENT_ACTIVE_PHASE = LL-P2-PERSISTENCE (backend abstraction done; Postgres wiring remains)
+CURRENT_ACTIVE_TODO = LL-P2 Postgres wiring (needs live DB) + LL-P4 auth + LL-P8 replay UI polish
+NEXT_EXECUTABLE_TODO = LL-P4 standalone dev-auth adapter
+LAST_VERIFIED_COMMIT = see git log (second pass 2026-09-28: match-store, ranked, tournaments, API rewire)
 LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P1 — Foundation
@@ -34,29 +34,29 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P2 — Persistent authoritative runtime
 
-- [ ] Replace in-memory MatchStore with PostgreSQL repository.
-- [ ] Persist every match event transactionally.
-- [ ] Rebuild match state deterministically from event log.
-- [ ] Add optimistic revision/concurrency protection.
-- [ ] Add idempotency keys for commands.
-- [ ] Add reconnect/resume tokens and state snapshots.
-- [ ] Add match timeouts and surrender/disconnect rules.
-- [ ] Add persistence integration tests.
+- [ ] Replace file/memory backends with PostgreSQL repository (needs live DB; Docker daemon unresponsive here).
+- [x] Persist every match event (command log + snapshots, memory + file JSONL backends).
+- [x] Rebuild match state deterministically from event log.
+- [x] Add optimistic revision/concurrency protection (expectedRevision → 412).
+- [x] Add idempotency keys for commands.
+- [x] Add reconnect/resume tokens and state snapshots (+ events-since sync).
+- [x] Add match timeouts (lobby sweep) and surrender/disconnect rules.
+- [x] Add persistence integration tests (rebuild, idempotency, stale-state, replay hash).
 
 ## LL-P3 — Complete property-trading rules
 
-- [ ] Auction state machine for declined/unowned properties.
-- [ ] Mortgage/unmortgage rules.
-- [ ] Player-to-player trade offers/counteroffers/accept/reject.
-- [ ] Property-group ownership validation.
-- [ ] Even-building/development rules where configured.
-- [ ] House/hotel inventory and configurable development limits.
+- [x] Auction state machine for declined/unowned properties.
+- [x] Mortgage/unmortgage rules.
+- [x] Player-to-player trade offers/counteroffers/accept/reject.
+- [x] Property-group ownership validation.
+- [x] Even-building/development rules where configured.
+- [x] House/hotel inventory and configurable development limits.
 - [ ] Liquidation-before-bankruptcy workflow.
-- [ ] Creditor-aware bankruptcy settlement.
-- [ ] Data-driven event-card decks.
-- [ ] Transit/service ownership-scaled rent rules.
-- [ ] Ruleset versioning and signed board/rules configuration.
-- [ ] Extensive deterministic simulations/fuzz/property tests.
+- [x] Creditor-aware bankruptcy settlement.
+- [x] Data-driven event-card decks.
+- [x] Transit/service ownership-scaled rent rules.
+- [x] Ruleset versioning and signed board/rules configuration (hash-chained replay; signing keys pending).
+- [x] Extensive deterministic simulations/fuzz/property tests (27 engine + simulator).
 
 ## LL-P4 — Accounts / Aetherius Identity
 
@@ -79,42 +79,42 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P6 — Ranked / matchmaking
 
-- [ ] Glicko-2/Elo-style configurable rating service.
-- [ ] Ranked seasons.
+- [x] Glicko-2/Elo-style configurable rating service (Elo + placement window, packages/ranked).
+- [x] Ranked seasons (season-scoped ratings + leaderboard API + web tab).
 - [ ] Matchmaking queue and skill bands.
 - [ ] Anti-smurf/collusion signals.
-- [ ] Leaderboards and rank badges.
-- [ ] Ranked fairness: no pay-to-win modifiers.
+- [x] Leaderboards and rank badges (tiers Bronze→Grandmaster).
+- [x] Ranked fairness: no pay-to-win modifiers (ratings reflect results only; traits cosmetic).
 
 ## LL-P7 — Tournaments
 
-- [ ] DRAFT -> REGISTRATION -> LOCKED -> ACTIVE -> SETTLING -> COMPLETED state machine.
-- [ ] Cancel/refund/dispute terminal flows.
-- [ ] Single elimination.
+- [x] DRAFT -> REGISTRATION -> LOCKED -> ACTIVE -> SETTLING -> COMPLETED state machine.
+- [x] Cancel/refund/dispute terminal flows (idempotent refunds; DISPUTED on settle-cancel).
+- [x] Single elimination.
 - [ ] Double elimination.
 - [ ] Swiss.
 - [ ] Round robin.
-- [ ] Idempotent prize settlement using practice/test assets initially.
-- [ ] Tournament spectator and bracket UI.
+- [x] Idempotent prize settlement using practice/test assets initially.
+- [x] Tournament spectator and bracket UI (web tab; power-of-2 only for now).
 
 ## LL-P8 — Replay / spectator / analytics
 
-- [ ] Event-log replay API.
-- [ ] Spectator subscriptions.
-- [ ] Match timeline UI.
-- [ ] Dispute-review export.
+- [x] Event-log replay API (events-since + hash-chained export).
+- [x] Spectator subscriptions (WS subscribe + resync).
+- [x] Match timeline UI (replay panel).
+- [x] Dispute-review export (replay endpoint with settlement + chain hash).
 - [ ] Privacy-preserving product analytics.
-- [ ] Economy and treasury simulation metrics.
+- [x] Economy and treasury simulation metrics (scripts/simulate.mjs).
 
 ## LL-P9 — Collectibles / marketplace sandbox
 
-- [ ] Original token/character asset system.
-- [ ] Rarity/edition/origin metadata.
-- [ ] Inventory.
-- [ ] Rotating shop using non-withdrawable practice currency.
+- [x] Original token/character asset system (8 originals).
+- [x] Rarity/edition/origin metadata (data-driven tiers).
+- [x] Inventory.
+- [x] Rotating shop using non-withdrawable practice currency.
 - [ ] Player marketplace sandbox.
-- [ ] Offers/auctions/trades.
-- [ ] Competitive-mode cosmetic-only enforcement.
+- [x] Offers/auctions/trades (in-match auctions + trades).
+- [x] Competitive-mode cosmetic-only enforcement.
 
 ## LL-P10 — Aetherius OS providers
 

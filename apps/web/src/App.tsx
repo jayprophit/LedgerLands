@@ -1,9 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BoardTile, GameCommand, MatchState } from "@ledgerlands/shared-types";
-import { createMatch, getBoard, sendCommand, subscribe } from "./api";
+import {
+  createMatch,
+  createTournament,
+  fetchLeaderboard,
+  fetchReplay,
+  getBoard,
+  listTournaments,
+  registerTournament,
+  reportTournamentResult,
+  sendCommand,
+  subscribe,
+  tournamentAction,
+  type WebTournament,
+} from "./api";
 import { QUESTS, RARITY_COLORS, TOKENS, dailyShop } from "./game-data";
 
-type Tab = "play" | "wallet" | "quests" | "inventory" | "shop";
+type Tab = "play" | "wallet" | "quests" | "inventory" | "shop" | "ranked" | "tournaments";
 
 interface Profile {
   name: string;
@@ -57,7 +70,19 @@ export function App() {
   const [bidAmount, setBidAmount] = useState("500");
   const [tradeTo, setTradeTo] = useState("");
   const [tradeOfferSats, setTradeOfferSats] = useState("0");
+  const [tradeOfferProps, setTradeOfferProps] = useState<string[]>([]);
+  const [tradeRequestProps, setTradeRequestProps] = useState<string[]>([]);
   const [loginReward, setLoginReward] = useState<number | null>(null);
+  const [replay, setReplay] = useState<{
+    chainHash: string;
+    rulesetVersion: string;
+    boardVersion: string;
+    events: Array<{ type: string; atRevision: number }>;
+    settlement: { winnerId?: string; balances: Record<string, number> };
+  } | null>(null);
+  const [leaderboard, setLeaderboard] = useState<Array<{ userId: string; rating: number; tier: string; rank: number; wins: number; losses: number }>>([]);
+  const [tournaments, setTournaments] = useState<WebTournament[]>([]);
+  const [tnyName, setTnyName] = useState("Friday Cup");
 
   useEffect(() => {
     getBoard().then(setBoard).catch((e) => setError(e instanceof Error ? e.message : "Board load failed"));
@@ -200,7 +225,7 @@ export function App() {
       </header>
 
       <nav className="tabs" aria-label="Sections">
-        {(["play", "wallet", "quests", "inventory", "shop"] as Tab[]).map((t) => (
+        {(["play", "wallet", "quests", "inventory", "shop", "ranked", "tournaments"] as Tab[]).map((t) => (
           <button key={t} className={tab === t ? "tab active" : "tab"} onClick={() => setTab(t)}>
             {t[0]!.toUpperCase() + t.slice(1)}
           </button>
@@ -412,10 +437,10 @@ export function App() {
             </section>
 
             <section className="panel">
-              <h2>Trade</h2>
+              <h2>Trade (sats + properties)</h2>
               <label>
                 Counterparty
-                <select value={tradeTo} onChange={(e) => setTradeTo(e.target.value)}>
+                <select value={tradeTo} onChange={(e) => { setTradeTo(e.target.value); setTradeRequestProps([]); }}>
                   {match.players.filter((p) => p.id !== playerId && !p.bankrupt).map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -426,17 +451,59 @@ export function App() {
               <label>
                 Offer sats<input value={tradeOfferSats} onChange={(e) => setTradeOfferSats(e.target.value)} inputMode="numeric" />
               </label>
+              <small className="muted">Offer properties (yours, undeveloped):</small>
+              <div className="check-list">
+                {Object.values(match.properties)
+                  .filter((pr) => pr.ownerId === playerId && pr.development === 0)
+                  .map((pr) => (
+                    <label key={pr.tileId} className="check">
+                      <input
+                        type="checkbox"
+                        checked={tradeOfferProps.includes(pr.tileId)}
+                        onChange={() => setTradeOfferProps((s) => (s.includes(pr.tileId) ? s.filter((x) => x !== pr.tileId) : [...s, pr.tileId]))}
+                      />
+                      {board.find((t) => t.id === pr.tileId)?.name ?? pr.tileId}
+                    </label>
+                  ))}
+              </div>
+              <small className="muted">Request properties (theirs, undeveloped):</small>
+              <div className="check-list">
+                {Object.values(match.properties)
+                  .filter((pr) => pr.ownerId === tradeTo && pr.development === 0)
+                  .map((pr) => (
+                    <label key={pr.tileId} className="check">
+                      <input
+                        type="checkbox"
+                        checked={tradeRequestProps.includes(pr.tileId)}
+                        onChange={() => setTradeRequestProps((s) => (s.includes(pr.tileId) ? s.filter((x) => x !== pr.tileId) : [...s, pr.tileId]))}
+                      />
+                      {board.find((t) => t.id === pr.tileId)?.name ?? pr.tileId}
+                    </label>
+                  ))}
+              </div>
               <button
                 disabled={busy || !tradeTo}
-                onClick={() => run(() => cmd({ type: "PROPOSE_TRADE", playerId: playerId!, toPlayerId: tradeTo, offer: { sats: Number(tradeOfferSats) || 0 }, request: {} }))}
+                onClick={() =>
+                  run(() =>
+                    cmd({
+                      type: "PROPOSE_TRADE",
+                      playerId: playerId!,
+                      toPlayerId: tradeTo,
+                      offer: { sats: Number(tradeOfferSats) || 0, propertyIds: tradeOfferProps },
+                      request: { sats: 0, propertyIds: tradeRequestProps },
+                    }),
+                  )
+                }
               >
-                Propose (sats only)
+                Propose trade
               </button>
               {pendingTrades.length === 0 && <p className="muted">No pending trades.</p>}
               {pendingTrades.map((t) => (
                 <div key={t.id} className="trade-row">
                   <small>
                     {t.id}: {match.players.find((p) => p.id === t.fromPlayerId)?.name} → {match.players.find((p) => p.id === t.toPlayerId)?.name} · {t.offer.sats ?? 0} sats
+                    {(t.offer.propertyIds ?? []).length > 0 && ` + [${(t.offer.propertyIds ?? []).join(", ")}]`}
+                    {(t.request.propertyIds ?? []).length > 0 && ` for [${(t.request.propertyIds ?? []).join(", ")}]`}
                   </small>
                   <div className="row">
                     {t.toPlayerId === playerId && (
@@ -480,6 +547,34 @@ export function App() {
                   R{event.atRevision} · {event.type}
                 </code>
               ))}
+            </section>
+
+            <section className="panel log-panel">
+              <h2>Replay / Dispute Export</h2>
+              <button
+                disabled={busy || !match}
+                onClick={() =>
+                  run(async () => {
+                    const r = await fetchReplay(match!.id);
+                    setReplay(r);
+                    return match!;
+                  })
+                }
+              >
+                Export replay
+              </button>
+              {replay && (
+                <>
+                  <div className="turn-line"><span>Ruleset</span><strong>{replay.rulesetVersion}</strong></div>
+                  <div className="turn-line"><span>Chain hash</span><strong className="hash">{replay.chainHash.slice(0, 16)}…</strong></div>
+                  <div className="turn-line"><span>Settlement</span><strong>{replay.settlement.winnerId ?? "—"}</strong></div>
+                  <div className="replay-timeline">
+                    {replay.events.map((e, i) => (
+                      <code key={`${e.atRevision}-${i}`}>R{e.atRevision} · {e.type}</code>
+                    ))}
+                  </div>
+                </>
+              )}
             </section>
           </aside>
         </div>
@@ -558,6 +653,126 @@ export function App() {
               </div>
             );
           })}
+        </section>
+      )}
+      {tab === "ranked" && (
+        <section className="launch-card wide">
+          <h2>Ranked — Season 1 (simulated)</h2>
+          <p className="muted">Cosmetic-only competition. Ratings reflect results, never purchases.</p>
+          <button
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              fetchLeaderboard()
+                .then((r) => setLeaderboard(r.leaderboard))
+                .catch((e) => setError(e instanceof Error ? e.message : "Leaderboard failed"))
+                .finally(() => setBusy(false));
+            }}
+          >
+            Refresh leaderboard
+          </button>
+          {leaderboard.length === 0 && <p className="muted">No ranked results yet. Finish matches, then report them via the API.</p>}
+          {leaderboard.map((row) => (
+            <div key={row.userId} className="player-row">
+              <span>#{row.rank} {row.userId} · {row.tier}</span>
+              <strong>{row.rating} · {row.wins}W/{row.losses}L</strong>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {tab === "tournaments" && (
+        <section className="launch-card wide">
+          <h2>Tournaments (simulated sats)</h2>
+          <p className="muted">Single elimination · 2 or 4 entries · needs API running.</p>
+          <div className="row">
+            <input value={tnyName} onChange={(e) => setTnyName(e.target.value)} aria-label="Tournament name" />
+            <button
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setError(undefined);
+                createTournament(tnyName.trim() || "Friday Cup")
+                  .then(() => listTournaments())
+                  .then((r) => setTournaments(r.tournaments))
+                  .catch((e) => setError(e instanceof Error ? e.message : "Create failed"))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Create
+            </button>
+            <button
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                listTournaments()
+                  .then((r) => setTournaments(r.tournaments))
+                  .catch((e) => setError(e instanceof Error ? e.message : "Refresh failed"))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+          {error && <p className="error">{error}</p>}
+          {tournaments.map((t) => (
+            <div key={t.id} className="trade-row">
+              <div className="turn-line"><span>{t.name}</span><strong>{t.status} · {t.entries.length}/{t.maxPlayers}</strong></div>
+              <small className="muted">Entries: {t.entries.join(", ") || "—"}</small>
+              {t.bracket.length > 0 && (
+                <div className="replay-timeline">
+                  {t.bracket.map((b) => (
+                    <div key={b.id} className="player-row">
+                      <span>R{b.round}: {b.seedA ?? "?"} vs {b.seedB ?? "?"}{b.winnerId ? ` → ${b.winnerId}` : ""}</span>
+                      {!b.winnerId && b.seedA && b.seedB && t.status === "ACTIVE" && (
+                        <button
+                          disabled={busy}
+                          onClick={() => {
+                            setBusy(true);
+                            reportTournamentResult(t.id, b.id, b.seedA!)
+                              .then(() => listTournaments())
+                              .then((r) => setTournaments(r.tournaments))
+                              .catch((e) => setError(e instanceof Error ? e.message : "Report failed"))
+                              .finally(() => setBusy(false));
+                          }}
+                        >
+                          {b.seedA} wins
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="row">
+                {t.status === "DRAFT" && (
+                  <button disabled={busy} onClick={() => { setBusy(true); tournamentAction(t.id, "open").then(() => listTournaments()).then((r) => setTournaments(r.tournaments)).finally(() => setBusy(false)); }}>
+                    Open
+                  </button>
+                )}
+                {t.status === "REGISTRATION" && (
+                  <>
+                    <button disabled={busy} onClick={() => { setBusy(true); registerTournament(t.id, profile.name).then(() => listTournaments()).then((r) => setTournaments(r.tournaments)).catch((e) => setError(e instanceof Error ? e.message : "Register failed")).finally(() => setBusy(false)); }}>
+                      Register me
+                    </button>
+                    <button disabled={busy} onClick={() => { setBusy(true); tournamentAction(t.id, "lock").then(() => listTournaments()).then((r) => setTournaments(r.tournaments)).catch((e) => setError(e instanceof Error ? e.message : "Lock failed")).finally(() => setBusy(false)); }}>
+                      Lock
+                    </button>
+                  </>
+                )}
+                {t.status === "LOCKED" && (
+                  <button disabled={busy} onClick={() => { setBusy(true); tournamentAction(t.id, "start").then(() => listTournaments()).then((r) => setTournaments(r.tournaments)).finally(() => setBusy(false)); }}>
+                    Start
+                  </button>
+                )}
+                {(t.status === "REGISTRATION" || t.status === "LOCKED" || t.status === "ACTIVE") && (
+                  <button disabled={busy} onClick={() => { setBusy(true); tournamentAction(t.id, "cancel").then(() => listTournaments()).then((r) => setTournaments(r.tournaments)).finally(() => setBusy(false)); }}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+              {t.championId && <p className="reward-line">Champion: {t.championId}</p>}
+            </div>
+          ))}
         </section>
       )}
     </main>
