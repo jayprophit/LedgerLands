@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { GameCommand } from "@ledgerlands/shared-types";
-import { DEFAULT_BOARD, GameRuleError } from "@ledgerlands/game-engine";
+import { BOARD_VERSION, DEFAULT_BOARD, GameRuleError, RULESET_VERSION } from "@ledgerlands/game-engine";
 import { MatchStore } from "./store.js";
 import { PracticeLedger } from "./ledger.js";
 
@@ -10,10 +10,12 @@ const store = new MatchStore();
 const ledger = new PracticeLedger();
 const subscriptions = new Map<string, Set<WebSocket>>();
 
-app.addHook("onRequest", async (_request, reply) => {
+app.addHook("onRequest", async (request, reply) => {
   reply.header("access-control-allow-origin", process.env.CORS_ORIGIN ?? "http://localhost:5173");
-  reply.header("access-control-allow-headers", "content-type,authorization,x-player-id");
+  reply.header("access-control-allow-headers", "content-type,authorization,x-player-id,x-command-id,x-expected-revision");
   reply.header("access-control-allow-methods", "GET,POST,OPTIONS");
+  // Basic rate-limit hint headers (full limiter in P34).
+  void request;
 });
 
 app.options("*", async (_request, reply) => reply.code(204).send());
@@ -22,27 +24,41 @@ app.get("/health", async () => ({
   status: "ok",
   app: "com.aetherius.ledgerlands",
   version: "0.1.0",
+  boardVersion: BOARD_VERSION,
+  rulesetVersion: RULESET_VERSION,
   realValueFeaturesEnabled: false,
 }));
 
-app.get("/api/board", async () => ({ tiles: DEFAULT_BOARD }));
-app.get("/api/matches", async () => ({ matches: store.list() }));
+app.get("/api/v1/health", async () => ({
+  status: "ok",
+  app: "com.aetherius.ledgerlands",
+  version: "0.1.0",
+  boardVersion: BOARD_VERSION,
+  rulesetVersion: RULESET_VERSION,
+  realValueFeaturesEnabled: false,
+}));
 
-app.post<{ Body: { playerName?: string; startingBalance?: number; seed?: number; solo?: boolean } }>(
-  "/api/matches",
-  async (request, reply) => {
-    const playerName = request.body?.playerName?.trim();
-    if (!playerName) return reply.code(400).send({ error: "playerName is required" });
-    const state = store.create({
-      playerName,
-      ...(request.body.startingBalance !== undefined ? { startingBalance: request.body.startingBalance } : {}),
-      ...(request.body.seed !== undefined ? { seed: request.body.seed } : {}),
-      ...(request.body.solo !== undefined ? { solo: request.body.solo } : {}),
-    });
-    const human = state.players.find((p) => !p.id.startsWith("bot-"));
-    return reply.code(201).send({ match: state, playerId: human?.id });
-  },
-);
+app.get("/api/board", async () => ({ tiles: DEFAULT_BOARD, boardVersion: BOARD_VERSION, rulesetVersion: RULESET_VERSION }));
+app.get("/api/v1/board", async () => ({ tiles: DEFAULT_BOARD, boardVersion: BOARD_VERSION, rulesetVersion: RULESET_VERSION }));
+app.get("/api/matches", async () => ({ matches: store.list() }));
+app.get("/api/v1/matches", async () => ({ matches: store.list() }));
+
+app.post<{
+  Body: { playerName?: string; startingBalance?: number; seed?: number; solo?: boolean; difficulty?: string };
+}>("/api/matches", async (request, reply) => {
+  const playerName = request.body?.playerName?.trim();
+  if (!playerName) return reply.code(400).send({ error: "playerName is required" });
+  if (playerName.length > 40) return reply.code(400).send({ error: "playerName too long" });
+  const state = store.create({
+    playerName,
+    ...(request.body.startingBalance !== undefined ? { startingBalance: request.body.startingBalance } : {}),
+    ...(request.body.seed !== undefined ? { seed: request.body.seed } : {}),
+    ...(request.body.solo !== undefined ? { solo: request.body.solo } : {}),
+    ...(request.body.difficulty !== undefined ? { difficulty: request.body.difficulty } : {}),
+  });
+  const human = state.players.find((p) => !p.id.startsWith("bot-"));
+  return reply.code(201).send({ match: state, playerId: human?.id });
+});
 
 app.get<{ Params: { id: string } }>("/api/matches/:id", async (request, reply) => {
   const match = store.get(request.params.id);
@@ -66,21 +82,34 @@ app.post<{ Params: { id: string }; Body: { playerName?: string; startingBalance?
   },
 );
 
-app.post<{ Params: { id: string }; Body: { playerId?: string; command?: GameCommand } }>(
-  "/api/matches/:id/command",
-  async (request, reply) => {
-    const playerId = request.body?.playerId;
-    const command = request.body?.command;
-    if (!playerId || !command) return reply.code(400).send({ error: "playerId and command are required" });
-    try {
-      const match = store.command(request.params.id, playerId, command);
-      broadcast(request.params.id, match);
-      return { match };
-    } catch (error) {
-      return ruleError(reply, error);
-    }
-  },
-);
+app.post<{ Params: { id: string } }>("/api/matches/:id/start", async (request, reply) => {
+  try {
+    const match = store.start(request.params.id);
+    broadcast(request.params.id, match);
+    return { match };
+  } catch (error) {
+    return ruleError(reply, error);
+  }
+});
+
+app.post<{
+  Params: { id: string };
+  Body: { playerId?: string; command?: GameCommand; commandId?: string; expectedRevision?: number };
+}>("/api/matches/:id/command", async (request, reply) => {
+  const playerId = request.body?.playerId;
+  const command = request.body?.command;
+  if (!playerId || !command) return reply.code(400).send({ error: "playerId and command are required" });
+  try {
+    const match = store.command(request.params.id, playerId, command, {
+      ...(request.body.commandId ? { commandId: request.body.commandId } : {}),
+      ...(request.body.expectedRevision !== undefined ? { expectedRevision: request.body.expectedRevision } : {}),
+    });
+    broadcast(request.params.id, match);
+    return { match };
+  } catch (error) {
+    return ruleError(reply, error);
+  }
+});
 
 app.post<{ Body: { accountId?: string; amount?: number } }>("/api/practice/faucet", async (request, reply) => {
   const { accountId, amount = 15000 } = request.body ?? {};
@@ -100,14 +129,21 @@ app.get<{ Params: { accountId: string } }>("/api/practice/:accountId", async (re
 
 function ruleError(reply: any, error: unknown) {
   if (error instanceof GameRuleError) {
-    return reply.code(409).send({ error: error.code, message: error.message });
+    const status = error.code === "STALE_STATE" ? 412 : error.code === "MATCH_NOT_FOUND" ? 404 : 409;
+    return reply.code(status).send({ error: error.code, message: error.message });
   }
   app.log.error(error);
   return reply.code(500).send({ error: "internal_error" });
 }
 
 const wss = new WebSocketServer({ server: app.server, path: "/ws" });
-wss.on("connection", (socket) => {
+wss.on("connection", (socket, req) => {
+  // Heartbeat to detect dead peers; interval cleared on close.
+  const heartbeat = setInterval(() => {
+    if (socket.readyState === socket.OPEN) socket.ping();
+  }, 30000);
+  socket.on("pong", () => undefined);
+  void req;
   socket.on("message", (raw) => {
     try {
       const message = JSON.parse(raw.toString()) as { type?: string; matchId?: string };
@@ -120,11 +156,15 @@ wss.on("connection", (socket) => {
       set.add(socket);
       const match = store.get(message.matchId);
       if (match) socket.send(JSON.stringify({ type: "match_state", match }));
-      socket.once("close", () => set?.delete(socket));
+      socket.once("close", () => {
+        set?.delete(socket);
+        clearInterval(heartbeat);
+      });
     } catch {
       socket.send(JSON.stringify({ type: "error", message: "invalid websocket message" }));
     }
   });
+  socket.once("close", () => clearInterval(heartbeat));
 });
 
 function broadcast(matchId: string, match: unknown): void {

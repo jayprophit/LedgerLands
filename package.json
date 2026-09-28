@@ -19,6 +19,9 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
+    "simulate": "node scripts/simulate.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "engine:smoke": "node scripts/engine-smoke.mjs",
     "verify": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {

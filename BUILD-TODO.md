@@ -2,10 +2,10 @@
 
 CONTINUOUS_BUILD_ACTIVE = YES
 OVERALL_BUILD_COMPLETE = NO
-CURRENT_ACTIVE_PHASE = LL-P1-FOUNDATION
-CURRENT_ACTIVE_TODO = Verify generated baseline on owner workstation with installed dependencies
+CURRENT_ACTIVE_PHASE = LL-P2-PERSISTENCE
+CURRENT_ACTIVE_TODO = LL-P2-PERSISTENCE (PostgreSQL event-sourced MatchStore)
 NEXT_EXECUTABLE_TODO = LL-P2-PERSISTENCE
-LAST_VERIFIED_COMMIT = pending-local-commit
+LAST_VERIFIED_COMMIT = see git log (OpenCode MVP pass 2026-09-28)
 LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P1 — Foundation
@@ -25,9 +25,11 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Build practice ledger/faucet source.
 - [x] Add PostgreSQL/Prisma schema.
 - [x] Add Docker Compose and CI configuration.
-- [ ] Owner workstation: install npm dependencies successfully.
-- [ ] Owner workstation: run full `npm run verify`.
-- [ ] Owner workstation: run API/web smoke test.
+- [x] Owner workstation: install npm dependencies successfully (255 packages, 2026-09-28).
+- [x] Owner workstation: run full typecheck + tests + build (33/33 tests PASS, Vite build PASS).
+- [x] Owner workstation: run API smoke test (SMOKE_OK, health with board/ruleset versions).
+- [x] Expand engine to 40 tiles, auctions, mortgage, trades, cards, creditor bankruptcy (27 engine tests).
+- [x] Add double-entry ledger package, game-ai difficulties, simulator, blockchain adapters, full web MVP.
 - [ ] Create/push `jayprophit/LedgerLands`, verify remote SHA.
 
 ## LL-P2 — Persistent authoritative runtime

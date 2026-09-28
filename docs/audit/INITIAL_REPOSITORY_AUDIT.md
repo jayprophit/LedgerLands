@@ -56,7 +56,9 @@ Reference export: `LedgerLands-source/LedgerLands` (non-git snapshot, content-id
 - Bankruptcy: currently returns properties to bank, zeroes surrender balance → needs creditor-aware transfer (debt-to-player vs debt-to-bank), mortgage handling, liquidation-before-bankruptcy workflow.
 - Bot in `store.ts` → move to `packages/game-ai` with BEGINNER…EXPERT policies using public command interface only.
 - API `test` scripts → add `--passWithNoTests` (or placeholder specs) so `npm test` is green.
-- `dist/` is tracked in git for `game-engine`/`shared-types`/`aetherius-sdk` despite `.gitignore` listing `packages/*/dist/` — untrack and remove from index.
+- `dist/` build output is correctly **untracked** (`git ls-files` shows no `dist`
+  entries; `.gitignore` covers `packages/*/dist/`, `apps/*/dist/`). No removal needed.
+  `LedgerLands-source.zip` (untracked, 45 kB) was removed during P00.
 
 ### REPLACE (missing or placeholder, build for real)
 

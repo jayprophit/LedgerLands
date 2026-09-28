@@ -4,7 +4,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json();
-  if (!response.ok) throw new Error(body.message ?? body.error ?? "Request failed");
+  if (!response.ok) throw new Error((body as { message?: string; error?: string }).message ?? (body as { error?: string }).error ?? "Request failed");
   return body as T;
 }
 
@@ -13,11 +13,14 @@ export async function getBoard(): Promise<BoardTile[]> {
   return (await json<{ tiles: BoardTile[] }>(response)).tiles;
 }
 
-export async function createMatch(playerName: string): Promise<{ match: MatchState; playerId: string }> {
+export async function createMatch(
+  playerName: string,
+  opts?: { difficulty?: string; seed?: number },
+): Promise<{ match: MatchState; playerId: string }> {
   const response = await fetch(`${API_URL}/api/matches`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ playerName, solo: true }),
+    body: JSON.stringify({ playerName, solo: true, difficulty: opts?.difficulty ?? "NORMAL", ...(opts?.seed !== undefined ? { seed: opts.seed } : {}) }),
   });
   return json(response);
 }
@@ -26,7 +29,7 @@ export async function sendCommand(matchId: string, playerId: string, command: Ga
   const response = await fetch(`${API_URL}/api/matches/${matchId}/command`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ playerId, command }),
+    body: JSON.stringify({ playerId, command, commandId: `${Date.now()}-${Math.random().toString(36).slice(2)}` }),
   });
   return (await json<{ match: MatchState }>(response)).match;
 }
@@ -38,8 +41,12 @@ export function subscribe(matchId: string, onState: (state: MatchState) => void)
   const socket = new WebSocket(url.toString());
   socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "subscribe", matchId })));
   socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data) as { type: string; match?: MatchState };
-    if (message.type === "match_state" && message.match) onState(message.match);
+    try {
+      const message = JSON.parse(event.data as string) as { type: string; match?: MatchState };
+      if (message.type === "match_state" && message.match) onState(message.match);
+    } catch {
+      /* ignore */
+    }
   });
   return () => socket.close();
 }

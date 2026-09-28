@@ -10,6 +10,7 @@ coverage/
 .vscode/
 .idea/
 .prisma/
+generated/
 apps/web/.vite/
 apps/web/dist/
 apps/api/dist/

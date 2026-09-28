@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@ledgerlands/aetherius-sdk": "0.1.0",
+    "@ledgerlands/game-ai": "0.1.0",
     "@ledgerlands/game-engine": "0.1.0",
+    "@ledgerlands/ledger": "0.1.0",
     "@ledgerlands/shared-types": "0.1.0",
     "fastify": "5.12.5",
     "ws": "8.21.3"
