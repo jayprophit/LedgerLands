@@ -44,8 +44,14 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
     }
   }
 
-  app.addHook("onRequest", async (_request, reply) => {
-    reply.header("access-control-allow-origin", process.env.CORS_ORIGIN ?? "http://localhost:5173");
+  const allowedOrigins = new Set(
+    (process.env.CORS_ORIGIN ?? "http://localhost:5173,http://127.0.0.1:5173").split(",").map((s) => s.trim()),
+  );
+
+  app.addHook("onRequest", async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin && allowedOrigins.has(origin)) reply.header("access-control-allow-origin", origin);
+    else reply.header("access-control-allow-origin", process.env.CORS_ORIGIN?.split(",")[0] ?? "http://localhost:5173");
     reply.header("access-control-allow-headers", "content-type,authorization,x-player-id,x-command-id,x-expected-revision");
     reply.header("access-control-allow-methods", "GET,POST,OPTIONS");
   });
@@ -191,11 +197,17 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
   });
 
   // ---- Tournaments (simulated sats) ----
-  app.post<{ Body: { name?: string; entryFee?: number; maxPlayers?: number } }>(
+  app.post<{ Body: { name?: string; format?: string; entryFee?: number; maxPlayers?: number } }>(
     "/api/tournaments",
     async (request, reply) => {
       try {
-        const t = tournaments.create({ name: request.body?.name ?? "", entryFee: request.body?.entryFee ?? 0, maxPlayers: request.body?.maxPlayers ?? 8 });
+        const format = (request.body?.format ?? "SINGLE_ELIMINATION") as "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION";
+        const t = tournaments.create({
+          name: request.body?.name ?? "",
+          format,
+          entryFee: request.body?.entryFee ?? 0,
+          maxPlayers: request.body?.maxPlayers ?? 8,
+        });
         return reply.code(201).send({ tournament: t });
       } catch (error) {
         return ruleError(reply, error);

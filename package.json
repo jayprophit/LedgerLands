@@ -19,17 +19,20 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
+    "e2e": "playwright test",
+    "e2e:install": "playwright install chromium",
     "simulate": "node scripts/simulate.mjs",
     "smoke": "node scripts/smoke.mjs",
     "engine:smoke": "node scripts/engine-smoke.mjs",
     "verify": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.5.2",
     "concurrently": "^9.2.1",
+    "dotenv": "^17.2.2",
     "prettier": "^3.6.2",
     "prisma": "7.10.0",
-    "typescript": "^5.9.2",
-    "dotenv": "^17.2.2"
+    "typescript": "^5.9.2"
   }
 }

@@ -84,11 +84,39 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 - Docker daemon unresponsive here → Postgres wiring stays a documented LL-P2 remainder
   (Prisma schema is the production target; file backend proves the event-sourced design).
 
-## Known issues
+## Third pass (ledgerlands2.txt)
 
-1. File/memory backends only; Postgres wiring (Prisma) is the remaining LL-P2
-   item and needs a live DB (Docker daemon unresponsive here). Schema ready.
-2. Tournament brackets require power-of-2 entries (byes are a follow-up).
-3. No Playwright E2E yet; inject + smoke coverage only.
-4. `npm audit`: 4 high advisories untriaged.
-5. Web `select` styling minimal on some browsers; no reduced-motion toggle yet.
+| Requirement | Implementation | Tests |
+|---|---|---|
+| LL-P2b PostgresBackend | `packages/match-store/src/postgres.ts` + Prisma models (`MatchCommand`, `MatchSnapshot` v1, `MatchCorrection`, `Match.initialState/botDifficulty/solo`); transaction-guarded append, `P2002 → ConcurrencyError`, id 409 | 7 unit (constraint-faithful fake) · **live PG: BLOCKED** |
+| Store API async | `StorageBackend` now promise-based (postgres parity) | covered by store suite |
+| LL-P4 DevAuth | `packages/auth` — HMAC dev sessions, `AuthPrincipal`, step-up refusal | 3/3 |
+| LL-P5 Matchmaking | `packages/matchmaking` — CASUAL_1V1/RANKED_1V1/FFA_4, expanding skill bands, reservations, stale sweep, self-match/duplicate guards | 5/5 |
+| LL-P10 Playwright E2E | `playwright.config.ts` + `tests/e2e/flows.spec.ts` — solo→settlement→wallet, replay across reload, ranked/tournament routing | **3/3 e2e PASS** |
+| LL-P11 Advisory triage | `docs/security/ADVISORY_TRIAGE.md` — all 4 highs are dev-only Prisma chain; `npm audit --omit=dev` = **0** | n/a |
+| LL-P12 Tournament byes | single-elim supports any count ≥2; bye matches flagged, explicit `targetMatchId` advancement | 11/11 (3,4,5,6,7,8,9,16 + payouts) |
+| LL-P13 Double elim | winners bracket + on-demand losers ladder + grand final; only grand final crowns | 6/6 + API integration |
+| LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
+| LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
+
+Totals: **104 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Breakdown: engine 27 · match-store 12 · api 11 · ranked 4 · tournaments 21 ·
+ledger 3 · ai 3 · auth 3 · matchmaking 5 · marketplace 3.
+
+## Known issues (current)
+
+1. **Live PostgreSQL verification BLOCKED** — no service reachable here.
+   `PostgresBackend` is unit-tested against a constraint-faithful fake; enabling
+   the real path is documented in `docs/audit/THIRD_PASS_CHECKPOINT.md`.
+2. **Snapshots are written but not consumed** — `rebuild()` always replays from
+   `initial`, so long matches pay O(commands) on every cache miss. Biggest
+   available performance win (`docs/PERFORMANCE.md` risk 3).
+3. **Write-through clone per command** — ~2.8 s/game locally; fixed by the
+   append-only Postgres path.
+4. Replay export is **tamper-evident, not signed**; no dispute workflow
+   service yet (`docs/REPLAY.md`).
+5. Matchmaking is O(n²) in queue length; fine for hundreds, not thousands.
+6. Swiss + round-robin tournament formats, marketplace offers/bids/bundles,
+   auth providers beyond dev, and 2v2 team economics remain NOT_STARTED.
+7. `npm audit`: 0 production advisories; 4 high dev-only (documented, not
+   force-fixed by policy).

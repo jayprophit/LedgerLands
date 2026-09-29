@@ -2,10 +2,10 @@
 
 CONTINUOUS_BUILD_ACTIVE = YES
 OVERALL_BUILD_COMPLETE = NO
-CURRENT_ACTIVE_PHASE = LL-P2-PERSISTENCE (backend abstraction done; Postgres wiring remains)
-CURRENT_ACTIVE_TODO = LL-P2 Postgres wiring (needs live DB) + LL-P4 auth + LL-P8 replay UI polish
-NEXT_EXECUTABLE_TODO = LL-P4 standalone dev-auth adapter
-LAST_VERIFIED_COMMIT = see git log (second pass 2026-09-28: match-store, ranked, tournaments, API rewire)
+CURRENT_ACTIVE_PHASE = LL-P3-PERSISTENCE-COMPLETION (snapshot-accelerated replay)
+CURRENT_ACTIVE_TODO = Use stored snapshots to shorten rebuild (perf risk 3)
+NEXT_EXECUTABLE_TODO = LL-P17-PERFORMANCE (snapshot-accelerated rebuild)
+LAST_VERIFIED_COMMIT = see git log (third pass 2026-09-28: postgres backend, auth, matchmaking, e2e, byes, double-elim, marketplace, perf)
 LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P1 — Foundation
@@ -34,14 +34,15 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P2 — Persistent authoritative runtime
 
-- [ ] Replace file/memory backends with PostgreSQL repository (needs live DB; Docker daemon unresponsive here).
-- [x] Persist every match event (command log + snapshots, memory + file JSONL backends).
+- [x] Add `PostgresBackend` (IMPLEMENTED + unit-tested; live PG verification BLOCKED — no service available).
+- [x] Persist every match event (command log + snapshots, memory + file + postgres backends).
 - [x] Rebuild match state deterministically from event log.
-- [x] Add optimistic revision/concurrency protection (expectedRevision → 412).
-- [x] Add idempotency keys for commands.
+- [x] Add optimistic revision/concurrency protection (expectedRevision → 412; PG append guarded by unique `(matchId,seq)` + `P2002 → ConcurrencyError`).
+- [x] Add idempotency keys for commands (unique `(matchId,commandId)`; crash-then-retry cannot duplicate).
 - [x] Add reconnect/resume tokens and state snapshots (+ events-since sync).
 - [x] Add match timeouts (lobby sweep) and surrender/disconnect rules.
-- [x] Add persistence integration tests (rebuild, idempotency, stale-state, replay hash).
+- [x] Add persistence integration tests (rebuild, idempotency, stale-state, replay hash, snapshot-vs-full-replay).
+- [ ] Use stored snapshots to shorten rebuild (perf risk 3 in docs/PERFORMANCE.md).
 
 ## LL-P3 — Complete property-trading rules
 
@@ -91,11 +92,12 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] DRAFT -> REGISTRATION -> LOCKED -> ACTIVE -> SETTLING -> COMPLETED state machine.
 - [x] Cancel/refund/dispute terminal flows (idempotent refunds; DISPUTED on settle-cancel).
 - [x] Single elimination.
-- [ ] Double elimination.
+- [x] Double elimination (winners bracket + on-demand losers ladder + grand final).
+- [x] Byes for non-power-of-two entry counts.
 - [ ] Swiss.
 - [ ] Round robin.
 - [x] Idempotent prize settlement using practice/test assets initially.
-- [x] Tournament spectator and bracket UI (web tab; power-of-2 only for now).
+- [x] Tournament spectator and bracket UI (web tab; formats: single/double elimination).
 
 ## LL-P8 — Replay / spectator / analytics
 
@@ -112,7 +114,9 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Rarity/edition/origin metadata (data-driven tiers).
 - [x] Inventory.
 - [x] Rotating shop using non-withdrawable practice currency.
-- [ ] Player marketplace sandbox.
+- [x] Player marketplace sandbox (`packages/marketplace`: LIST/CANCEL/BUY, escrow-routed
+      double-entry settlement, idempotency, self-buy/funds/expiry/double-purchase guards).
+- [ ] Marketplace offers / bids / auctions / bundles.
 - [x] Offers/auctions/trades (in-match auctions + trades).
 - [x] Competitive-mode cosmetic-only enforcement.
 
@@ -159,7 +163,10 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P14 — Compliance / security gates
 
-- [ ] Threat model.
+- [x] Threat model (docs/security/THREAT_MODEL.md).
+- [x] npm advisory triage (docs/security/ADVISORY_TRIAGE.md; 0 production advisories).
+- [x] Dev authentication adapter with an explicit non-production boundary (`packages/auth`).
+- [x] Replay tamper-evidence documented precisely (docs/REPLAY.md).
 - [ ] Rate limiting/anti-automation.
 - [ ] Fraud/collusion detection.
 - [ ] KYC/age/jurisdiction provider adapters if real-value features are pursued.
@@ -170,7 +177,9 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P15 — Economy simulation / real-value decision gate
 
-- [ ] Multi-agent economy simulator with large virtual populations.
+- [x] Headless economy simulator (`npm run simulate`, seeded, aggregate output).
+- [x] Performance baseline + scaling risks (docs/PERFORMANCE.md).
+- [ ] Multi-agent economy simulator with large virtual populations (10k+ games).
 - [ ] Treasury solvency modelling.
 - [ ] Reward inflation/sink analysis.
 - [ ] Withdrawal-pressure modelling.

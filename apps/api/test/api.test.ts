@@ -115,6 +115,36 @@ describe("API integration", () => {
     expect(done.tournament.championId).toBe("p1");
   });
 
+  it("runs a double-elimination tournament to a champion", async () => {
+    const created = await post("/api/tournaments", { name: "DE Cup", format: "DOUBLE_ELIMINATION", maxPlayers: 4 }, 201);
+    const id = created.tournament.id;
+    expect(created.tournament.format).toBe("DOUBLE_ELIMINATION");
+    await post(`/api/tournaments/${id}/open`, {});
+    for (const u of ["d1", "d2", "d3", "d4"]) await post(`/api/tournaments/${id}/register`, { userId: u });
+    await post(`/api/tournaments/${id}/lock`, {});
+    await post(`/api/tournaments/${id}/start`, {});
+    // Drive every playable match until the event completes.
+    for (let i = 0; i < 24; i += 1) {
+      const t = (await app.inject({ method: "GET", url: `/api/tournaments/${id}` }).then((r) => r.json())) as any;
+      if (t.tournament.status === "COMPLETED") break;
+      const order: Record<string, number> = { WINNERS: 0, LOSERS: 1, GRAND_FINAL: 2 };
+      const playable = t.tournament.bracket
+        .filter((b: any) => !b.bye && !b.winnerId && b.seedA && b.seedB)
+        .sort((x: any, y: any) => (order[x.bracket ?? "WINNERS"] - order[y.bracket ?? "WINNERS"]) || x.round - y.round);
+      if (playable.length === 0) break;
+      const m = playable[0];
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tournaments/${id}/results`,
+        payload: { bracketMatchId: m.id, winnerId: m.seedA },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    const final = (await app.inject({ method: "GET", url: `/api/tournaments/${id}` }).then((r) => r.json())) as any;
+    expect(final.tournament.status).toBe("COMPLETED");
+    expect(final.tournament.championId).toBeTruthy();
+  });
+
   it("issues dev sessions and verifies identity", async () => {
     const login = await post("/api/auth/dev/login", { displayName: "Dev Tester" });
     expect(login.token.startsWith("lld1.")).toBe(true);
