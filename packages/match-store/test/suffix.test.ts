@@ -198,6 +198,47 @@ describe("suffix read contract", () => {
     void backend;
   });
 
+  it("accepts a suffix whose commands share a result revision", async () => {
+    // The engine advances `revision` only when a command emits an event, so an
+    // accepted command that produces no event leaves the revision unchanged and
+    // two consecutive commands carry the SAME resultRevision. Validating the
+    // suffix with a strict increase rejected those runs and forced a full
+    // replay, so the suffix path was never actually taken in a real match and
+    // the contract was untested in practice.
+    const backend = new MemoryBackend();
+    const store = new PersistentMatchStore(backend);
+    const { match } = await store.create({
+      playerName: "NoEvent",
+      seed: 77,
+      matchId: "m-noevent",
+      humanId: "human-1",
+    });
+    for (let i = 0; i < 40; i += 1) {
+      const cur = await store.get(match.id);
+      if (!cur || cur.status !== "ACTIVE") break;
+      const p = cur.players[cur.currentPlayerIndex]!;
+      try {
+        await store.command(
+          match.id,
+          p.id,
+          cur.turnPhase === "ROLL" ? { type: "ROLL_DICE" } : { type: "END_TURN", playerId: p.id },
+          { commandId: `nev-${i}` },
+        );
+      } catch {
+        break;
+      }
+    }
+    const record = await backend.load(match.id);
+    const resultRevisions = record!.commands.map((c) => c.resultRevision ?? 0);
+    // Precondition: the log really does contain repeated revisions.
+    expect(new Set(resultRevisions).size).toBeLessThan(resultRevisions.length);
+
+    (store as unknown as { states: Map<string, unknown> }).states.clear();
+    const rebuilt = await store.get(match.id);
+    expect(store.lastRebuild?.path).toBe("suffix");
+    expect(rebuilt).toBeDefined();
+  });
+
   it("falls back to full replay when the log has no snapshot", async () => {
     const store = new PersistentMatchStore(new MemoryBackend());
     const { match, playerId } = await store.create({ playerName: "NoSnap", seed: 9 });

@@ -310,49 +310,70 @@ describe("afterSeq contract holds identically across backends", () => {
   });
 });
 
-describe("MemoryBackend cannot mask Postgres range bugs", () => {
-  it("ignores afterSeq, so only the database can prove the bound", async () => {
-    // This is the reason the Postgres assertions are not redundant. MemoryBackend
-    // and FileBackend filter by revision only, so a wrong `afterSeq` translation
-    // in `postgres.ts` is invisible to every other backend. If a future change
-    // made them honour `afterSeq`, this test should fail and be rewritten - that
-    // would be a real contract change, not a cleanup.
+describe("all backends honour afterSeq", () => {
+  it("memory and file now apply the same bound as postgres", async () => {
+    // This test used to assert the OPPOSITE — that MemoryBackend and
+    // FileBackend ignore `afterSeq` so that only Postgres could prove the
+    // bound. It carried an explicit instruction: if a change made them honour
+    // `afterSeq`, the test should fail and be rewritten, because that is a real
+    // contract change.
+    //
+    // It is that change. Revision-only filtering was unsound: the engine only
+    // advances the revision when a command emits an event, so accepted commands
+    // that emit nothing share a result revision, and a revision boundary then
+    // does not coincide with a command boundary. All three backends now select
+    // on the storage sequence, so they agree with each other AND with the
+    // snapshot, which is what actually makes the suffix sound.
     const record = playedRecord(2, 6);
     const memory = new MemoryBackend();
     await memory.save("mask", record);
     const withSeq = await memory.readCommandsAfter("mask", { afterSeq: 5, afterRevision: -1 });
     const withoutSeq = await memory.readCommandsAfter("mask", { afterRevision: -1 });
-    expect(withSeq.commands).toHaveLength(withoutSeq.commands.length);
-    expect(withSeq.commands).toHaveLength(record.commands.length);
+    expect(withoutSeq.commands).toHaveLength(record.commands.length);
+    // afterSeq 5 leaves exactly the one command the snapshot did not cover.
+    expect(withSeq.commands).toHaveLength(1);
+    expect(withSeq.commands).toHaveLength(withoutSeq.commands.length - 5);
 
     const file = new FileBackend(mkdtempSync(join(tmpdir(), "ll-mask-")));
     await file.save("mask", record);
     const fileSeq = await file.readCommandsAfter("mask", { afterSeq: 5, afterRevision: -1 });
-    expect(fileSeq.commands).toHaveLength(record.commands.length);
+    expect(fileSeq.commands).toHaveLength(1);
   });
 
-  it("postgres honours afterSeq where the others cannot", async () => {
+  it("every backend returns the same rows for the same bound", async () => {
     const record = playedRecord(2, 6);
     await pg.save("b-honours", record);
     const memory = new MemoryBackend();
     await memory.save("honours", record);
-    const db = await pg.readCommandsAfter("b-honours", { afterSeq: 5, afterRevision: -1 });
-    const mem = await memory.readCommandsAfter("honours", { afterSeq: 5, afterRevision: -1 });
+    const file = new FileBackend(mkdtempSync(join(tmpdir(), "ll-mask-")));
+    await file.save("honours", record);
+    const range = { afterSeq: 5, afterRevision: -1 };
+    const db = await pg.readCommandsAfter("b-honours", range);
+    const mem = await memory.readCommandsAfter("honours", range);
+    const fil = await file.readCommandsAfter("honours", range);
     expect(db.commands).toHaveLength(1);
-    expect(mem.commands).toHaveLength(6);
+    expect(mem.commands).toHaveLength(1);
+    expect(fil.commands).toHaveLength(1);
   });
 
-  it("postgres returns fewer rows as afterSeq advances", async () => {
+  it("every backend returns fewer rows as afterSeq advances", async () => {
     const record = playedRecord(2, 6);
     await pg.save("b-monotonic", record);
-    const counts: number[] = [];
-    for (let covered = 0; covered <= record.commands.length; covered += 1) {
-      counts.push((await pg.readCommandsAfter("b-monotonic", { afterSeq: covered, afterRevision: -1 })).commands.length);
+    const memory = new MemoryBackend();
+    await memory.save("monotonic", record);
+    const file = new FileBackend(mkdtempSync(join(tmpdir(), "ll-mono-")));
+    await file.save("monotonic", record);
+    const expected = [6, 5, 4, 3, 2, 1, 0];
+    for (const [label, backend, id] of [
+      ["postgres", pg, "b-monotonic"],
+      ["memory", memory, "monotonic"],
+      ["file", file, "monotonic"],
+    ] as const) {
+      const counts: number[] = [];
+      for (let covered = 0; covered <= record.commands.length; covered += 1) {
+        counts.push((await backend.readCommandsAfter(id, { afterSeq: covered, afterRevision: -1 })).commands.length);
+      }
+      expect(counts, label).toEqual(expected);
     }
-    expect(counts).toEqual([6, 5, 4, 3, 2, 1, 0]);
-    // Monotonically non-increasing and ending at zero: the shape a correct
-    // exclusive-after-count bound produces.
-    for (let i = 1; i < counts.length; i += 1) expect(counts[i]!).toBeLessThanOrEqual(counts[i - 1]!);
-    expect(counts.at(-1)).toBe(0);
   });
 });

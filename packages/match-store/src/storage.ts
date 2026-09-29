@@ -141,10 +141,37 @@ export class MemoryBackend implements StorageBackend {
     const all = record.commands;
     const out: PersistedCommand[] = [];
     let excluded = 0;
-    for (const c of all) {
-      if ((c.resultRevision ?? 0) > range.afterRevision) out.push(c);
-      else excluded += 1;
+    // The array index IS the storage sequence: commands are append-only and
+    // stored zero-based, so `afterSeq` is an index bound.
+    //
+    // Filtering on `resultRevision` alone was wrong. The engine only advances
+    // the revision when a command emits an event, so a command that is accepted
+    // but emits nothing shares the previous command's revision. A snapshot
+    // taken between two such commands therefore has a revision boundary that
+    // does not line up with the command boundary, and the revision filter both
+    // dropped a command the snapshot had not covered and kept one it had.
+    for (let seq = 0; seq < all.length; seq += 1) {
+      const c = all[seq]!;
+      if (range.afterSeq !== undefined) {
+        // A storage sequence is present, so it is the WHOLE answer. Applying the
+        // revision bound as well is not a belt-and-braces check, it is a second
+        // and wrong filter: the engine only advances the revision when a command
+        // emits an event, so the first command after a snapshot can legitimately
+        // carry the snapshot's own revision and would be silently dropped, making
+        // a complete suffix look short and forcing a full replay.
+        if (seq < range.afterSeq) {
+          excluded += 1;
+          continue;
+        }
+      } else if ((c.resultRevision ?? 0) <= range.afterRevision) {
+        // No sequence: fall back to the revision bound alone.
+        excluded += 1;
+        continue;
+      }
+      if (range.throughSeq !== undefined && seq >= range.throughSeq) break;
+      out.push(c);
     }
+    if (range.limit !== undefined && out.length > range.limit) out.length = range.limit;
     return { commands: out, totalCommands: all.length, commandsExcluded: excluded, maxSeq: all.length };
   }
 }
@@ -196,10 +223,24 @@ export class FileBackend implements StorageBackend {
     if (!record) return { commands: [], totalCommands: 0, commandsExcluded: 0, maxSeq: 0 };
     const commands: PersistedCommand[] = [];
     let excluded = 0;
-    for (const c of record.commands) {
-      if ((c.resultRevision ?? 0) > range.afterRevision) commands.push(c);
-      else excluded += 1;
+    // Same index-bound semantics as MemoryBackend: array index is the storage
+    // sequence, and `afterSeq`/`throughSeq` bound it. See the note there for why
+    // a revision-only filter is not sufficient.
+    for (let seq = 0; seq < record.commands.length; seq += 1) {
+      const c = record.commands[seq]!;
+      if (range.afterSeq !== undefined) {
+        if (seq < range.afterSeq) {
+          excluded += 1;
+          continue;
+        }
+      } else if ((c.resultRevision ?? 0) <= range.afterRevision) {
+        excluded += 1;
+        continue;
+      }
+      if (range.throughSeq !== undefined && seq >= range.throughSeq) break;
+      commands.push(c);
     }
+    if (range.limit !== undefined && commands.length > range.limit) commands.length = range.limit;
     return { commands, totalCommands: record.commands.length, commandsExcluded: excluded, maxSeq: record.commands.length };
   }
 }

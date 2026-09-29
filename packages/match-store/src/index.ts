@@ -91,11 +91,19 @@ function suffixIsComplete(suffix: SuffixReadResult, snapshot: MatchSnapshot): bo
   // followed by exactly `total - seq` more. This catches a snapshot whose
   // revision lies, because the returned suffix then has the wrong length.
   if (suffix.commands.length !== suffix.totalCommands - snapshot.seq) return false;
-  // And the returned run must be gap-free relative to the claimed revision.
+  // And the returned run must not go BACKWARDS relative to the claimed revision.
+  //
+  // Non-decreasing, not strictly increasing. The engine only advances
+  // `revision` when a command emits an event, so a command that is accepted but
+  // produces no event leaves the revision where it was. Two consecutive
+  // commands can therefore share a `resultRevision`, and requiring strict
+  // increase made a perfectly valid suffix look corrupt and forced a full
+  // replay. Completeness is established by the command-COUNT check above, which
+  // is authoritative; this only rejects a suffix that runs backwards.
   let prev = snapshot.revision;
   for (const c of suffix.commands) {
     const r = c.resultRevision ?? 0;
-    if (r <= prev) return false;
+    if (r < prev) return false;
     prev = r;
   }
   return true;
