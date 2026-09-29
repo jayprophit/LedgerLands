@@ -201,16 +201,21 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
   });
 
   // ---- Tournaments (simulated sats) ----
-  app.post<{ Body: { name?: string; format?: string; entryFee?: number; maxPlayers?: number } }>(
+  app.post<{ Body: { name?: string; format?: string; entryFee?: number; maxPlayers?: number; rounds?: number } }>(
     "/api/tournaments",
     async (request, reply) => {
       try {
-        const format = (request.body?.format ?? "SINGLE_ELIMINATION") as "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION";
+        const format = (request.body?.format ?? "SINGLE_ELIMINATION") as
+          | "SINGLE_ELIMINATION"
+          | "DOUBLE_ELIMINATION"
+          | "SWISS"
+          | "ROUND_ROBIN";
         const t = tournaments.create({
           name: request.body?.name ?? "",
           format,
           entryFee: request.body?.entryFee ?? 0,
           maxPlayers: request.body?.maxPlayers ?? 8,
+          ...(format === "SWISS" && request.body?.rounds !== undefined ? { swiss: { rounds: request.body.rounds } } : {}),
         });
         return reply.code(201).send({ tournament: t });
       } catch (error) {

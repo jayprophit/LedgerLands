@@ -96,8 +96,8 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Single elimination.
 - [x] Double elimination (winners bracket + on-demand losers ladder + grand final).
 - [x] Byes for non-power-of-two entry counts.
-- [ ] Swiss.
-- [ ] Round robin.
+- [x] Swiss (configurable rounds, points, deterministic tiebreaks, bye history, repeat avoidance).
+- [x] Round robin (circle method, odd-field byes, no duplicate pairing per cycle).
 - [x] Idempotent prize settlement using practice/test assets initially.
 - [x] Tournament spectator and bracket UI (web tab; formats: single/double elimination).
 

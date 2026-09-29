@@ -99,9 +99,9 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **115 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
-Breakdown: engine 27 · match-store 23 · api 11 · ranked 4 · tournaments 21 ·
-ledger 3 · ai 3 · auth 3 · matchmaking 5 · marketplace 3.
+Totals: **142 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Breakdown: engine 27 · match-store 23 · tournaments 36 · api 14 · matchmaking 15 ·
+ranked 4 · ledger 3 · ai 3 · auth 3 · marketplace 3.
 
 ### LL-P17 performance (applied this pass)
 
@@ -118,7 +118,10 @@ ledger 3 · ai 3 · auth 3 · matchmaking 5 · marketplace 3.
 
 | Requirement | Implementation | Tests |
 |---|---|---|
-| LL-P17b suffix reads | `loadHeader` + `readCommandsAfter` on the storage contract; `MatchSnapshot.seq` + `MatchSnapshot.seq` index; all three backends | 23/23 match-store (+10 new suffix suite) |
+| LL-P17b suffix reads | `loadHeader` + `readCommandsAfter` on the storage contract; `MatchSnapshot.seq` + index; all three backends | 23/23 match-store (+10 suffix suite) |
+| LL-P6 durable matchmaking | `store-types`/`store`/`durable`: explicit QUEUED/RESERVED/MATCHED/CANCELLED/EXPIRED, CAS group claims, lease recovery, Postgres CAS contract, `MatchmakingEntry` model | 15/15 matchmaking (+10), 14/14 API (+2) |
+| Swiss format | `formats.ts` — configurable rounds/points, standings order (points → Buchholz → wins → seed), bye history, repeat avoidance, controlled float | 15 new format tests |
+| Round-robin format | circle method, odd-field bye placeholder, round-completion gating, deterministic standings | included above |
 
 ## Known issues (current)
 
@@ -137,7 +140,7 @@ ledger 3 · ai 3 · auth 3 · matchmaking 5 · marketplace 3.
 4. Replay export is **tamper-evident, not signed**; no dispute workflow
    service yet (`docs/REPLAY.md`).
 5. Matchmaking is O(n²) in queue length; fine for hundreds, not thousands.
-6. Swiss + round-robin tournament formats, marketplace offers/bids/bundles,
-   auth providers beyond dev, and 2v2 team economics remain NOT_STARTED.
+6. Marketplace offers/bids/bundles, auth providers beyond dev, dispute workflow,
+   signed replay manifests, and 2v2 team economics remain NOT_STARTED.
 7. `npm audit`: 0 production advisories; 4 high dev-only (documented, not
    force-fixed by policy).

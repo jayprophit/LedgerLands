@@ -145,6 +145,58 @@ describe("API integration", () => {
     expect(final.tournament.championId).toBeTruthy();
   });
 
+  it("runs a swiss tournament to completion", async () => {
+    const created = await post("/api/tournaments", { name: "Swiss API", format: "SWISS", maxPlayers: 4, rounds: 2 }, 201);
+    const id = created.tournament.id;
+    await post(`/api/tournaments/${id}/open`, {});
+    for (const u of ["s1", "s2", "s3", "s4"]) await post(`/api/tournaments/${id}/register`, { userId: u });
+    await post(`/api/tournaments/${id}/lock`, {});
+    await post(`/api/tournaments/${id}/start`, {});
+    for (let i = 0; i < 32; i += 1) {
+      const t = (await app.inject({ method: "GET", url: `/api/tournaments/${id}` }).then((r) => r.json())) as any;
+      if (t.tournament.status === "COMPLETED") break;
+      const pending = t.tournament.bracket.filter((b: any) => b.bracket === "SWISS" && !b.winnerId && b.seedA);
+      if (pending.length === 0) break;
+      const m = pending[0];
+      const winner = m.bye ? m.seedA : [m.seedA, m.seedB].sort()[1];
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tournaments/${id}/results`,
+        payload: { bracketMatchId: m.id, winnerId: winner },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    const done = (await app.inject({ method: "GET", url: `/api/tournaments/${id}` }).then((r) => r.json())) as any;
+    expect(done.tournament.status).toBe("COMPLETED");
+    expect(done.tournament.swiss.complete).toBe(true);
+    expect(done.tournament.championId).toBeTruthy();
+  });
+
+  it("runs a round-robin tournament to completion", async () => {
+    const created = await post("/api/tournaments", { name: "RR API", format: "ROUND_ROBIN", maxPlayers: 4 }, 201);
+    const id = created.tournament.id;
+    await post(`/api/tournaments/${id}/open`, {});
+    for (const u of ["r1", "r2", "r3", "r4"]) await post(`/api/tournaments/${id}/register`, { userId: u });
+    await post(`/api/tournaments/${id}/lock`, {});
+    await post(`/api/tournaments/${id}/start`, {});
+    for (let i = 0; i < 32; i += 1) {
+      const t = (await app.inject({ method: "GET", url: `/api/tournaments/${id}` }).then((r) => r.json())) as any;
+      if (t.tournament.status === "COMPLETED") break;
+      const pending = t.tournament.bracket.filter((b: any) => b.bracket === "ROUND_ROBIN" && !b.winnerId && b.seedA);
+      if (pending.length === 0) break;
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/tournaments/${id}/results`,
+        payload: { bracketMatchId: pending[0].id, winnerId: pending[0].seedA },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    const done = (await app.inject({ method: "GET", url: `/api/tournaments/${id}` }).then((r) => r.json())) as any;
+    expect(done.tournament.status).toBe("COMPLETED");
+    expect(done.tournament.roundRobin.complete).toBe(true);
+    expect(done.tournament.championId).toBeTruthy();
+  });
+
   it("issues dev sessions and verifies identity", async () => {
     const login = await post("/api/auth/dev/login", { displayName: "Dev Tester" });
     expect(login.token.startsWith("lld1.")).toBe(true);

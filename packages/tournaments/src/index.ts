@@ -14,7 +14,44 @@ export type TournamentStatus =
 
 export type BracketFormat = "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION" | "ROUND_ROBIN" | "SWISS";
 
-export type BracketSide = "WINNERS" | "LOSERS" | "GRAND_FINAL";
+export type {
+  SwissConfig,
+  SwissResult,
+  SwissState,
+  SwissPlayer,
+  RoundRobinState,
+  StandingRow,
+} from "./formats.js";
+export {
+  DEFAULT_SWISS,
+  applyRoundRobinResult,
+  applySwissResult,
+  buildRoundRobin,
+  createSwiss,
+  firstRoundPairs,
+  pairRound,
+  roundRobinStandings,
+  swissStandings,
+} from "./formats.js";
+
+import {
+  applyRoundRobinResult,
+  applySwissResult,
+  buildRoundRobin,
+  createSwiss,
+  firstRoundPairs,
+  pairRound,
+  roundRobinStandings,
+  swissStandings,
+  type RoundRobinState,
+  type StandingRow,
+  type SwissConfig,
+  type SwissResult,
+  type SwissState,
+  DEFAULT_SWISS,
+} from "./formats.js";
+
+export type BracketSide = "WINNERS" | "LOSERS" | "GRAND_FINAL" | "SWISS" | "ROUND_ROBIN";
 
 export interface BracketMatch {
   id: string;
@@ -45,6 +82,12 @@ export interface Tournament {
   eliminated?: string[];
   /** Double-elimination players holding one loss and awaiting their next match. */
   losersPool?: string[];
+  /** Swiss state (rounds, points, opponent history). Present iff format is SWISS. */
+  swiss?: SwissState;
+  /** Round-robin state. Present iff format is ROUND_ROBIN. */
+  roundRobin?: RoundRobinState;
+  /** Swiss config captured at create time (before the state exists). */
+  swissConfig?: Partial<SwissConfig>;
   championId?: string;
   createdAt: string;
   updatedAt: string;
@@ -67,12 +110,29 @@ export class TournamentService {
   private readonly tournaments = new Map<string, Tournament>();
   constructor(private readonly ledger = new DoubleEntryLedger()) {}
 
-  create(params: { name: string; format?: BracketFormat; entryFee?: number; maxPlayers?: number; prizeSplitBps?: number[] }): Tournament {
+  create(params: {
+    name: string;
+    format?: BracketFormat;
+    entryFee?: number;
+    maxPlayers?: number;
+    prizeSplitBps?: number[];
+    swiss?: Partial<SwissConfig>;
+  }): Tournament {
     const name = params.name.trim();
     if (!name) throw new TournamentError("INVALID_NAME", "Tournament name is required.");
     const format = params.format ?? "SINGLE_ELIMINATION";
-    if (format !== "SINGLE_ELIMINATION" && format !== "DOUBLE_ELIMINATION") {
-      throw new TournamentError("UNSUPPORTED_FORMAT", `${format} is reserved for a later milestone; single or double elimination only.`);
+    if (format !== "SINGLE_ELIMINATION" && format !== "DOUBLE_ELIMINATION" && format !== "SWISS" && format !== "ROUND_ROBIN") {
+      throw new TournamentError("UNSUPPORTED_FORMAT", `Unknown format ${format}.`);
+    }
+    if (format === "SWISS" && params.swiss) {
+      // Validate against the merged config, so partial overrides are judged in
+      // context rather than against undefined.
+      const s = { ...DEFAULT_SWISS, ...params.swiss };
+      if (s.rounds < 1) throw new TournamentError("INVALID_SWISS", "swiss rounds must be >= 1");
+      if (s.pointsBye < 0) throw new TournamentError("INVALID_SWISS", "swiss bye points must be >= 0");
+      if (s.pointsLoss > s.pointsDraw || s.pointsDraw > s.pointsWin) {
+        throw new TournamentError("INVALID_SWISS", "swiss points must satisfy loss <= draw <= win");
+      }
     }
     const entryFee = params.entryFee ?? 0;
     if (!Number.isSafeInteger(entryFee) || entryFee < 0) throw new TournamentError("INVALID_FEE", "entryFee must be a non-negative integer.");
@@ -88,6 +148,7 @@ export class TournamentService {
       prizeSplitBps: split,
       entries: [],
       bracket: [],
+      ...(params.swiss ? { swissConfig: params.swiss } : {}),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -126,6 +187,15 @@ export class TournamentService {
     if (t.entries.length < 2) throw new TournamentError("NOT_ENOUGH_PLAYERS", "Need at least 2 entries.");
     if (t.format === "DOUBLE_ELIMINATION") {
       t.bracket = buildDoubleElim(t.entries);
+    } else if (t.format === "SWISS") {
+      // Swiss and round robin build their own round structure; `bracket` stays
+      // empty and the format state drives play. Round 0 is seeded at lock so
+      // pairings exist before the first result is reported.
+      t.swiss = createSwiss(t.entries, t.swissConfig ?? {});
+      this.seedSwissRound(t);
+    } else if (t.format === "ROUND_ROBIN") {
+      t.roundRobin = buildRoundRobin(t.entries);
+      this.seedRoundRobinRound(t);
     } else {
       t.bracket = buildSingleElim(t.entries);
     }
@@ -142,6 +212,8 @@ export class TournamentService {
   reportResult(id: string, bracketMatchId: string, winnerId: string): Tournament {
     const t = this.require(id);
     if (t.status !== "ACTIVE") throw new TournamentError("NOT_ACTIVE", "Tournament is not active.");
+    if (t.format === "SWISS") return this.reportSwissResult(t, bracketMatchId, winnerId);
+    if (t.format === "ROUND_ROBIN") return this.reportRoundRobinResult(t, bracketMatchId, winnerId);
     const m = t.bracket.find((b) => b.id === bracketMatchId);
     if (!m) throw new TournamentError("MATCH_NOT_FOUND", "Bracket match not found.");
     if (m.bye) throw new TournamentError("BYE_MATCH", "Bye matches are decided at lock; nothing to report.");
@@ -153,6 +225,127 @@ export class TournamentService {
     m.winnerId = winnerId;
     this.advance(t, m, winnerId);
     if (t.format === "DOUBLE_ELIMINATION") this.afterDoubleElimResult(t, m, winnerId);
+    this.touch(t);
+    return this.copy(t);
+  }
+
+  /**
+   * Materialise the current Swiss round as bracket rows so reporting a result
+   * uses the same `BracketMatch` identity and audit trail as elimination.
+   */
+  private seedSwissRound(t: Tournament): void {
+    const state = t.swiss;
+    if (!state) return;
+    if (state.round >= state.totalRounds || state.complete) return;
+    t.bracket = t.bracket.filter((m) => m.bracket !== "SWISS");
+    const pairs = state.round === 0 ? firstRoundPairs(t.entries) : pairRound(state);
+    for (const [a, b] of pairs) {
+      t.bracket.push({
+        id: randomUUID(),
+        round: state.round + 1,
+        seedA: a,
+        ...(b !== undefined ? { seedB: b } : {}),
+        ...(b === undefined ? { bye: true } : {}),
+        bracket: "SWISS",
+      });
+    }
+  }
+
+  private reportSwissResult(t: Tournament, bracketMatchId: string, winnerId: string): Tournament {
+    const m = t.bracket.find((b) => b.id === bracketMatchId);
+    if (!m || m.bracket !== "SWISS") throw new TournamentError("MATCH_NOT_FOUND", "Swiss round match not found.");
+    if (m.winnerId) throw new TournamentError("ALREADY_REPORTED", "Result already recorded.");
+    const a = m.seedA;
+    if (!a) throw new TournamentError("SEED_UNRESOLVED", "Swiss match has no first seed.");
+    const result: SwissResult = m.bye ? "BYE" : m.seedB === winnerId ? "LOSS" : "WIN";
+    if (m.seedB && m.seedA !== winnerId && m.seedB !== winnerId) {
+      throw new TournamentError("NOT_PARTICIPANT", "Winner is not in this swiss match.");
+    }
+    applySwissResult(t.swiss!, a, m.seedB, result);
+    m.winnerId = winnerId;
+    this.advanceSwiss(t);
+    this.touch(t);
+    return this.copy(t);
+  }
+
+  private advanceSwiss(t: Tournament): void {
+    const state = t.swiss!;
+    state.round += 1;
+    if (state.round >= state.totalRounds) {
+      state.complete = true;
+      state.standings = swissStandings(state);
+      const winner = state.standings[0]?.playerId;
+      if (winner) {
+        t.championId = winner;
+        t.status = "SETTLING";
+        this.settle(t);
+      }
+      return;
+    }
+    this.seedSwissRound(t);
+  }
+
+  /**
+   * Materialise the current round-robin round as bracket rows so results are
+   * reported by `BracketMatch` id, exactly like every other format.
+   */
+  private seedRoundRobinRound(t: Tournament): void {
+    const state = t.roundRobin;
+    if (!state) return;
+    if (state.round >= state.totalRounds || state.complete) return;
+    const fixtures = state.rounds[state.round] ?? [];
+    t.bracket = t.bracket.filter((m) => m.bracket !== "ROUND_ROBIN");
+    for (const f of fixtures) {
+      t.bracket.push({
+        id: randomUUID(),
+        round: state.round + 1,
+        seedA: f.a,
+        ...(f.b !== undefined ? { seedB: f.b } : {}),
+        ...(f.b === undefined ? { bye: true } : {}),
+        bracket: "ROUND_ROBIN",
+      });
+    }
+  }
+
+  private reportRoundRobinResult(t: Tournament, bracketMatchId: string, winnerId: string): Tournament {
+    const state = t.roundRobin;
+    if (!state) throw new TournamentError("MATCH_NOT_FOUND", "Round-robin state missing.");
+    const m = t.bracket.find((b) => b.id === bracketMatchId);
+    if (!m || m.bracket !== "ROUND_ROBIN") {
+      throw new TournamentError("MATCH_NOT_FOUND", "Round-robin match not found.");
+    }
+    if (m.winnerId) throw new TournamentError("ALREADY_REPORTED", "Result already recorded.");
+    const a = m.seedA;
+    if (!a) throw new TournamentError("SEED_UNRESOLVED", "Round-robin match has no first seed.");
+    if (m.seedB && m.seedA !== winnerId && m.seedB !== winnerId) {
+      throw new TournamentError("NOT_PARTICIPANT", "Winner is not in this round-robin match.");
+    }
+    const fixtures = state.rounds[state.round] ?? [];
+    if (fixtures.length === 0) throw new TournamentError("NOT_ACTIVE", "No round-robin round in progress.");
+    const result: "WIN" | "LOSS" = m.seedB === winnerId ? "LOSS" : "WIN";
+    applyRoundRobinResult(state, a, m.seedB, result);
+    m.winnerId = winnerId;
+    state.reported = state.reported ?? {};
+    state.reported[state.round] = [...(state.reported[state.round] ?? []), a];
+    // The round advances only once every fixture in it has been decided.
+    if ((state.reported[state.round] ?? []).length < fixtures.length) {
+      this.touch(t);
+      return this.copy(t);
+    }
+    state.round += 1;
+    if (state.round >= state.totalRounds) {
+      state.complete = true;
+      state.standings = roundRobinStandings(state);
+      const winner = state.standings[0]?.playerId;
+      if (winner) {
+        t.championId = winner;
+        t.status = "SETTLING";
+        this.settle(t);
+      }
+      this.touch(t);
+      return this.copy(t);
+    }
+    this.seedRoundRobinRound(t);
     this.touch(t);
     return this.copy(t);
   }
