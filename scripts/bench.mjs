@@ -85,6 +85,63 @@ const results = {};
   }
 }
 
+// 2b. Rebuild path comparison: no snapshot vs snapshot vs suffix-read snapshot
+{
+  const backend = new MemoryBackend();
+  const store = new PersistentMatchStore(backend);
+  const cmds = { count: 0 };
+  const id = await playMatch(store, 1234, cmds);
+  const record = await backend.load(id);
+  const total = record.commands.length;
+  const lastSnapshot = record.snapshots.at(-1);
+
+  // (a) forced full replay: no usable snapshot
+  const noSnap = structuredClone(record);
+  noSnap.snapshots = [];
+  await backend.save(id, noSnap);
+  let t0 = performance.now();
+  (store).states.clear();
+  await store.get(id);
+  const fullMs = ms(t0);
+
+  // (b) snapshot rebuild, backend returning the full log
+  await backend.save(id, record);
+  t0 = performance.now();
+  (store).states.clear();
+  await store.get(id);
+  const snapshotMs = ms(t0);
+  const pathWithSnapshot = store.lastRebuild?.path;
+
+  // (c) suffix read: the backend serves only commands after the snapshot
+  const suffixBackend = {
+    save: (mid, rec) => backend.save(mid, rec),
+    load: (mid) => backend.load(mid),
+    loadHeader: (mid) => backend.loadHeader(mid),
+    list: () => backend.list(),
+    readCommandsAfter: (mid, range) => backend.readCommandsAfter(mid, range),
+  };
+  const suffixStore = new PersistentMatchStore(suffixBackend);
+  t0 = performance.now();
+  await suffixStore.get(id);
+  const suffixMs = ms(t0);
+  const suffixResult = await backend.readCommandsAfter(id, {
+    afterRevision: lastSnapshot?.revision ?? 0,
+    ...(lastSnapshot?.seq !== undefined ? { afterSeq: lastSnapshot.seq } : {}),
+  });
+
+  results.rebuildPaths = {
+    matchId: id,
+    totalCommands: total,
+    snapshotPosition: lastSnapshot ? { revision: lastSnapshot.revision, seq: lastSnapshot.seq } : null,
+    suffixLength: suffixResult.commands.length,
+    noSnapshotFullReplayMs: fullMs,
+    snapshotRebuildMs: snapshotMs,
+    suffixReadRebuildMs: suffixMs,
+    pathWithSnapshot,
+    note: "MemoryBackend suffix is a logical range query; Postgres does true indexed partial I/O (not live-verified).",
+  };
+}
+
 // 3. Replay export
 {
   const store = new PersistentMatchStore(new MemoryBackend());

@@ -1,11 +1,13 @@
 import type { MatchStatus } from "@ledgerlands/shared-types";
 import type { Difficulty } from "@ledgerlands/game-ai";
 import type {
+  CommandRange,
   MatchCorrection,
   MatchSnapshot,
   PersistedCommand,
   StorageBackend,
   StoredMatch,
+  SuffixReadResult,
 } from "./storage.js";
 
 /** Snapshot envelope version stored in `MatchSnapshot.version`. */
@@ -54,6 +56,8 @@ export interface DbSnapshotRow {
   revision: number;
   version: number;
   state: unknown;
+  /** Commands covered by this snapshot; drives the suffix range query. */
+  seq?: number | null;
 }
 
 export interface DbCorrectionRow {
@@ -74,7 +78,16 @@ export interface PrismaStoreTx {
       orderBy: { seq: "asc" | "desc" };
       select: { seq: boolean; commandId: boolean };
     }): Promise<Array<{ seq: number; commandId: string }>>;
+    /**
+     * Range query, equivalent to
+     * `WHERE matchId = ? AND seq > ? [AND seq < ?] ORDER BY seq ASC [LIMIT ?]`.
+     * Served by the `(matchId, seq)` unique index, so a suffix read never
+     * materialises the full command history.
+     */
+    listRange(matchId: string, range: { gtSeq?: number; ltSeq?: number; limit?: number }): Promise<DbCommandRow[]>;
     listAll(matchId: string): Promise<DbCommandRow[]>;
+    count(matchId: string): Promise<number>;
+    maxSeq(matchId: string): Promise<number | null>;
     create(args: { data: Record<string, unknown> }): Promise<unknown>;
   };
   matchSnapshot: {
@@ -186,6 +199,23 @@ export class PostgresBackend implements StorageBackend {
     });
   }
 
+  /**
+   * Header-only read: the command log is never selected, which is what makes
+   * suffix reconstruction a real saving on this backend.
+   */
+  async loadHeader(matchId: string): Promise<StoredMatch | undefined> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.match.findUnique({ where: { id: matchId } });
+      if (!row || !row.initialState) return undefined;
+      const [snapshots, corrections, totalCommands] = await Promise.all([
+        tx.matchSnapshot.findMany({ where: { matchId } }),
+        tx.matchCorrection.findMany({ where: { matchId } }),
+        tx.matchCommand.count(matchId),
+      ]);
+      return this.assemble(row, [], snapshots, corrections, totalCommands);
+    });
+  }
+
   async load(matchId: string): Promise<StoredMatch | undefined> {
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.match.findUnique({ where: { id: matchId } });
@@ -199,30 +229,46 @@ export class PostgresBackend implements StorageBackend {
           resultRevision: r.resultRevision,
         }),
       );
-      const snapshots: MatchSnapshot[] = (await tx.matchSnapshot.findMany({ where: { matchId } })).map((r) => ({
-        revision: r.revision,
-        state: r.state as MatchSnapshot["state"],
-        at: new Date().toISOString(),
-      }));
-      const corrections: MatchCorrection[] = (await tx.matchCorrection.findMany({ where: { matchId } })).map((r) => ({
-        kind: r.kind as MatchCorrection["kind"],
-        detail: r.detail ?? "",
-        at: new Date().toISOString(),
-      }));
-      const stored: StoredMatch = {
-        initial: row.initialState as StoredMatch["initial"],
-        commands,
-        snapshots,
-        corrections,
-        seenCommandIds: commands.map((c) => c.commandId),
-        botDifficulty: row.botDifficulty as Difficulty,
-        solo: row.solo,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        meta: { status: row.status as MatchStatus, stateRevision: row.stateRevision },
-      };
-      return stored;
+      const [snapshots, corrections] = await Promise.all([
+        tx.matchSnapshot.findMany({ where: { matchId } }),
+        tx.matchCorrection.findMany({ where: { matchId } }),
+      ]);
+      return this.assemble(row, commands, snapshots, corrections, commands.length);
     });
+  }
+
+  private assemble(
+    row: DbMatchRow,
+    commands: PersistedCommand[],
+    snapshotRows: DbSnapshotRow[],
+    correctionRows: DbCorrectionRow[],
+    totalCommands: number,
+  ): StoredMatch {
+    const snapshots: MatchSnapshot[] = snapshotRows.map((r) => ({
+      revision: r.revision,
+      state: r.state as MatchSnapshot["state"],
+      at: new Date().toISOString(),
+      // `seq` marks how many commands the snapshot covers; the DB keys on it
+      // for the range query.
+      ...(r.seq !== null && r.seq !== undefined ? { seq: r.seq } : {}),
+    }));
+    const corrections: MatchCorrection[] = correctionRows.map((r) => ({
+      kind: r.kind as MatchCorrection["kind"],
+      detail: r.detail ?? "",
+      at: new Date().toISOString(),
+    }));
+    return {
+      initial: row.initialState as StoredMatch["initial"],
+      commands,
+      snapshots,
+      corrections,
+      seenCommandIds: commands.map((c) => c.commandId),
+      botDifficulty: row.botDifficulty as Difficulty,
+      solo: row.solo,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      meta: { status: row.status as MatchStatus, stateRevision: row.stateRevision, totalCommands },
+    };
   }
 
   async list(): Promise<string[]> {
@@ -231,6 +277,42 @@ export class PostgresBackend implements StorageBackend {
     return this.prisma.$transaction(async (tx) => {
       const rows = await tx.match.findMany({ select: { id: true } });
       return rows.map((r) => r.id);
+    });
+  }
+
+  /**
+   * TRUE partial read: an indexed range query on `(matchId, seq)`. Only the
+   * suffix rows are fetched, never the full history. Callers pass
+   * `afterSeq` derived from a snapshot; when it is omitted the query degrades
+   * to a full read plus an in-memory revision filter, which is correct but not
+   * partial — callers should always supply it.
+   */
+  async readCommandsAfter(matchId: string, range: CommandRange): Promise<SuffixReadResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const rows = await tx.matchCommand.listRange(matchId, {
+        ...(range.afterSeq !== undefined ? { gtSeq: range.afterSeq } : {}),
+        ...(range.throughSeq !== undefined ? { ltSeq: range.throughSeq } : {}),
+        ...(range.limit !== undefined ? { limit: range.limit } : {}),
+      });
+      const totalCommands = await tx.matchCommand.count(matchId);
+      const maxSeq = (await tx.matchCommand.maxSeq(matchId)) ?? undefined;
+      const commands = rows
+        .filter((r) => r.resultRevision > range.afterRevision)
+        .map(
+          (r): PersistedCommand => ({
+            command: r.command as PersistedCommand["command"],
+            commandId: r.commandId,
+            actorPlayerId: r.actorId ?? "unknown",
+            at: new Date().toISOString(),
+            resultRevision: r.resultRevision,
+          }),
+        );
+      return {
+        commands,
+        totalCommands,
+        commandsExcluded: totalCommands - commands.length,
+        ...(maxSeq !== undefined ? { maxSeq } : {}),
+      };
     });
   }
 
@@ -260,6 +342,7 @@ export class PostgresBackend implements StorageBackend {
       data: snapshots.map((s) => ({
         matchId,
         revision: s.revision,
+        seq: s.seq ?? 0,
         version: SNAPSHOT_FORMAT_VERSION,
         state: s.state as unknown as Record<string, unknown>,
       })),

@@ -2,10 +2,10 @@
 
 CONTINUOUS_BUILD_ACTIVE = YES
 OVERALL_BUILD_COMPLETE = NO
-CURRENT_ACTIVE_PHASE = LL-P3-PERSISTENCE-COMPLETION (snapshot-accelerated replay)
-CURRENT_ACTIVE_TODO = Use stored snapshots to shorten rebuild (perf risk 3)
-NEXT_EXECUTABLE_TODO = LL-P17-PERFORMANCE (snapshot-accelerated rebuild)
-LAST_VERIFIED_COMMIT = see git log (third pass 2026-09-28: postgres backend, auth, matchmaking, e2e, byes, double-elim, marketplace, perf)
+CURRENT_ACTIVE_PHASE = LL-P6-MATCHMAKING-PERSISTENCE
+CURRENT_ACTIVE_TODO = Durable/distributed matchmaking store behind the existing logic
+NEXT_EXECUTABLE_TODO = LL-P6-MATCHMAKING-PERSISTENCE
+LAST_VERIFIED_COMMIT = see git log (fourth pass: suffix reads, header reads, docs/PERSISTENCE.md)
 LAST_REMOTE_VERIFIED_COMMIT = none
 
 ## LL-P1 — Foundation
@@ -43,6 +43,8 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Add match timeouts (lobby sweep) and surrender/disconnect rules.
 - [x] Add persistence integration tests (rebuild, idempotency, stale-state, replay hash, snapshot-vs-full-replay).
 - [x] Use stored snapshots to shorten rebuild (guarded; equal to full replay).
+- [x] Range-oriented suffix reads (`readCommandsAfter`) + header-only reads on all backends
+      (Postgres does a true indexed `seq >` query; File is logical-only by design).
 
 ## LL-P3 — Complete property-trading rules
 

@@ -98,7 +98,8 @@ describe("PersistentMatchStore", () => {
     (store as unknown as { states: Map<string, unknown> }).states.clear();
     expect(await store.get(match.id)).toEqual(expected);
 
-    // Corrupting every snapshot must fall back to full replay, not break reads.
+    // Corrupting every snapshot (lying revision, consistent seq) must fall back
+    // to full replay, not produce a wrong state.
     const corrupted = structuredClone(record);
     for (const s of corrupted.snapshots) s.revision = 999_999;
     const tampered = new PersistentMatchStore(new MemoryBackend());

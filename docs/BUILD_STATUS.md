@@ -99,28 +99,39 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **105 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
-Breakdown: engine 27 · match-store 13 · api 11 · ranked 4 · tournaments 21 ·
+Totals: **115 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Breakdown: engine 27 · match-store 23 · api 11 · ranked 4 · tournaments 21 ·
 ledger 3 · ai 3 · auth 3 · matchmaking 5 · marketplace 3.
 
 ### LL-P17 performance (applied this pass)
 
-- `rebuild()` now uses the newest *usable* snapshot + command tail instead of
-  replaying from `initial`. Guarded by `commandsConsistentUpTo()` so the result
-  is provably identical to full replay; corrupt/stale/ahead-of-log snapshots
-  fall back automatically. Test: snapshot rebuild == expected, and corrupting
-  every snapshot still returns the same state.
+- `rebuild()` now does a **header-only read** plus a **suffix read**
+  (`StorageBackend.readCommandsAfter`) instead of selecting the full command log.
+  Validation is strict (gap-free, complete, `seq <= total`, exact tail length);
+  any rejection falls back to full replay, so it can only be faster, never wrong.
+  `store.lastRebuild.path` makes the path observable. Measured on a 429-command
+  match: full replay 615 ms → suffix rebuild 19–24 ms.
 - `MemoryBackend.save` no longer deep-clones the record per command
   (reads still clone). Match play 142 s → 93 s for 50 games.
+
+## Fourth pass (ledgerlands3.txt)
+
+| Requirement | Implementation | Tests |
+|---|---|---|
+| LL-P17b suffix reads | `loadHeader` + `readCommandsAfter` on the storage contract; `MatchSnapshot.seq` + `MatchSnapshot.seq` index; all three backends | 23/23 match-store (+10 new suffix suite) |
 
 ## Known issues (current)
 
 1. **Live PostgreSQL verification BLOCKED** — no service reachable here.
    `PostgresBackend` is unit-tested against a constraint-faithful fake; enabling
    the real path is documented in `docs/audit/THIRD_PASS_CHECKPOINT.md`.
-2. **Snapshot-accelerated rebuild is in place**, but the record read is still
-   O(commands) per rebuild; a partial/suffix read is the next step.
-3. **Per-command cost remains ~1.9 s/game locally**, dominated by the engine's
+2. **Postgres partial I/O is unproven** — the indexed range query is
+   implemented and unit-tested against a query-recording fake, but no live DB
+   has run it. Confirm with `EXPLAIN` when one is available.
+3. **FileBackend still has no partial physical I/O** (single JSON document per
+   match). Logical suffix selection only; a segmented format needs versioning +
+   migration, so compatibility was kept. See `docs/PERSISTENCE.md`.
+4. **Per-command cost remains ~1.9 s/game locally**, dominated by the engine's
    pure `applyCommand` clone + bot decisioning. The `PostgresBackend` avoids
    the store-side cost by writing one row per command.
 4. Replay export is **tamper-evident, not signed**; no dispute workflow

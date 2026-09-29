@@ -24,6 +24,8 @@ class FakePrisma implements PrismaStoreClient {
   commands: Array<DbCommandRow & { matchId: string }> = [];
   snapshots: Array<DbSnapshotRow & { matchId: string }> = [];
   corrections: Array<DbCorrectionRow & { matchId: string }> = [];
+  /** Every range query the backend issued, so partial I/O can be asserted. */
+  rangeQueries: Array<{ matchId: string; gtSeq?: number; ltSeq?: number; limit?: number }> = [];
 
   async $transaction<T>(fn: (tx: PrismaStoreTx) => Promise<T>): Promise<T> {
     const self = this;
@@ -61,6 +63,22 @@ class FakePrisma implements PrismaStoreClient {
             .sort((a, b) => a.seq - b.seq)
             .map((r) => ({ seq: r.seq, commandId: r.commandId, actorId: r.actorId, command: r.command, resultRevision: r.resultRevision }));
         },
+        async listRange(matchId: string, range: { gtSeq?: number; ltSeq?: number; limit?: number }) {
+          let rows = self.commands.filter((c) => c.matchId === matchId).sort((a, b) => a.seq - b.seq);
+          if (range.gtSeq !== undefined) rows = rows.filter((c) => c.seq > range.gtSeq!);
+          if (range.ltSeq !== undefined) rows = rows.filter((c) => c.seq < range.ltSeq!);
+          if (range.limit !== undefined) rows = rows.slice(0, range.limit);
+          // Record the range actually issued so tests can prove partial I/O.
+          self.rangeQueries.push({ matchId, ...range });
+          return rows.map((r) => ({ seq: r.seq, commandId: r.commandId, actorId: r.actorId, command: r.command, resultRevision: r.resultRevision }));
+        },
+        async count(matchId: string) {
+          return self.commands.filter((c) => c.matchId === matchId).length;
+        },
+        async maxSeq(matchId: string) {
+          const rows = self.commands.filter((c) => c.matchId === matchId);
+          return rows.length === 0 ? null : Math.max(...rows.map((r) => r.seq));
+        },
         async create({ data }) {
           const d = data as unknown as DbCommandRow & { matchId: string };
           if (self.commands.some((c) => c.matchId === d.matchId && (c.seq === d.seq || c.commandId === d.commandId))) {
@@ -72,7 +90,9 @@ class FakePrisma implements PrismaStoreClient {
       },
       matchSnapshot: {
         async findMany({ where }) {
-          return self.snapshots.filter((s) => s.matchId === where.matchId).map((r) => ({ revision: r.revision, version: r.version, state: r.state }));
+          return self.snapshots
+            .filter((s) => s.matchId === where.matchId)
+            .map((r) => ({ revision: r.revision, version: r.version, state: r.state, seq: r.seq }));
         },
         async deleteMany({ where }) {
           self.snapshots = self.snapshots.filter((s) => s.matchId !== where.matchId);

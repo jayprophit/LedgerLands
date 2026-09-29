@@ -16,6 +16,7 @@ import {
   type PersistedCommand,
   type StorageBackend,
   type StoredMatch,
+  type SuffixReadResult,
 } from "./storage.js";
 
 export * from "./storage.js";
@@ -52,30 +53,49 @@ export interface ReplayExport {
 const SNAPSHOT_EVERY_COMMANDS = 25;
 
 /**
- * Newest snapshot whose recorded revision actually exists in the command log.
- * A snapshot ahead of the log (truncated write, lost row) is unusable.
+ * Newest snapshot that is not ahead of the persisted command log.
+ *
+ * A snapshot claiming a sequence beyond `meta.totalCommands` (truncated write,
+ * lost row, or a snapshot copied from a longer run of the same match) is
+ * unusable and the caller must full-replay. When the record carries commands
+ * (a full `load`, e.g. in tests), the revision is cross-checked against them too.
  */
 function latestUsableSnapshot(stored: StoredMatch): MatchSnapshot | undefined {
-  const revs = new Set(stored.commands.map((c) => c.resultRevision ?? 0));
-  return [...stored.snapshots]
-    .filter((s) => revs.has(s.revision))
-    .sort((a, b) => b.revision - a.revision)[0];
+  const total = stored.meta.totalCommands;
+  const candidates = [...stored.snapshots]
+    // A snapshot cannot cover more commands than the log holds.
+    .filter((s) => (s.seq === undefined ? true : s.seq <= total))
+    .sort((a, b) => b.revision - a.revision || (b.seq ?? 0) - (a.seq ?? 0));
+  if (stored.commands.length > 0) {
+    // Full record in hand: cross-check the claimed revision against the log.
+    const revs = new Set(stored.commands.map((c) => c.resultRevision ?? 0));
+    return candidates.find((s) => revs.has(s.revision));
+  }
+  return candidates[0];
 }
 
 /**
- * A snapshot at `revision` may only be used when the log is gap-free up to it:
- * command result revisions must be strictly increasing with no duplicates.
- * That guarantees "snapshot + tail" == "full replay".
+ * A suffix may be used only when it is a gap-free run (strictly increasing
+ * result revisions), starts strictly after the snapshot revision, and accounts
+ * for every command the backend holds. Anything else means snapshot and log
+ * disagree — including a tampered snapshot whose `revision` lies about where it
+ * sits — so the only safe answer is a full replay.
  */
-function commandsConsistentUpTo(commands: readonly PersistedCommand[], revision: number): boolean {
-  let prev = -1;
-  for (const c of commands) {
+function suffixIsComplete(suffix: SuffixReadResult, snapshot: MatchSnapshot): boolean {
+  if (snapshot.seq === undefined) return false; // cannot be validated
+  if (snapshot.seq > suffix.totalCommands) return false; // snapshot ahead of the log
+  // The authoritative check: a snapshot covering `seq` commands must be
+  // followed by exactly `total - seq` more. This catches a snapshot whose
+  // revision lies, because the returned suffix then has the wrong length.
+  if (suffix.commands.length !== suffix.totalCommands - snapshot.seq) return false;
+  // And the returned run must be gap-free relative to the claimed revision.
+  let prev = snapshot.revision;
+  for (const c of suffix.commands) {
     const r = c.resultRevision ?? 0;
     if (r <= prev) return false;
     prev = r;
-    if (r >= revision) return true;
   }
-  return false;
+  return true;
 }
 
 export function chainHashForEvents(events: MatchState["log"]): string {
@@ -86,8 +106,12 @@ export function chainHashForEvents(events: MatchState["log"]): string {
   return prev;
 }
 
+export type RebuildPath = "suffix" | "full-replay";
+
 export class PersistentMatchStore {
   private readonly states = new Map<string, MatchState>();
+  /** Observability: which reconstruction path the last rebuild took. */
+  lastRebuild: { matchId: string; path: RebuildPath; at: string } | undefined;
   constructor(private readonly backend: StorageBackend = new MemoryBackend()) {}
 
   static withFileBackend(dataDir: string): PersistentMatchStore {
@@ -118,7 +142,7 @@ export class PersistentMatchStore {
       solo,
       createdAt: now,
       updatedAt: now,
-      meta: { status: "LOBBY", stateRevision: 0 },
+      meta: { status: "LOBBY", stateRevision: 0, totalCommands: 0 },
     };
     let live = structuredClone(initial);
     if (solo) {
@@ -235,7 +259,7 @@ export class PersistentMatchStore {
       if (live.status !== "LOBBY") continue;
       if (nowMs - Date.parse(stored.createdAt) < lobbyTimeoutMs) continue;
       stored.corrections.push({ kind: "CANCEL_LOBBY_TIMEOUT", at: new Date(nowMs).toISOString(), detail: `lobby idle > ${lobbyTimeoutMs}ms` });
-      stored.meta = { status: "CANCELLED", stateRevision: live.revision };
+      stored.meta = { status: "CANCELLED", stateRevision: live.revision, totalCommands: stored.commands.length };
       this.touch(stored);
       await this.backend.save(matchId, stored);
       this.states.delete(matchId);
@@ -292,32 +316,71 @@ export class PersistentMatchStore {
   }
 
   /**
-   * Deterministic rebuild: latest usable snapshot + its command tail, then
-   * corrections. Snapshots are advisory caches — a stale, corrupt, or
-   * gap-inconsistent snapshot falls back to a full replay rather than
-   * failing the read, so this can only ever be faster, never wrong.
+   * Deterministic rebuild. Preferred path is a *suffix read*: load the record
+   * header, pick the newest usable snapshot, then ask the backend for only the
+   * commands after that revision. If no snapshot is usable (or a suffix read
+   * fails), it falls back to a full replay from `initial`.
+   *
+   * `lastRebuild` records which path ran, so callers/tests can assert that the
+   * suffix path is actually taken rather than silently degenerating.
    */
   async rebuild(matchId: string): Promise<MatchState | undefined> {
-    const stored = await this.backend.load(matchId);
-    if (!stored) return undefined;
-    let state = this.replayFrom(stored);
-    if (stored.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT")) {
+    // Header first: the command log is fetched only if it is actually needed.
+    const header = await this.backend.loadHeader(matchId);
+    if (!header) return undefined;
+    let state: MatchState;
+    let path: RebuildPath;
+    try {
+      const rebuilt = await this.rebuildFromSuffix(matchId, header);
+      state = rebuilt.state;
+      path = rebuilt.path;
+    } catch {
+      // Suffix read failed (transient backend error): fall back to a full read
+      // so a read never returns nothing just because a range query failed.
+      const full = await this.backend.load(matchId);
+      if (!full) return undefined;
+      state = replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command));
+      path = "full-replay";
+    }
+    if (header.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT")) {
       state = { ...state, status: "CANCELLED" };
     }
     this.states.set(matchId, state);
+    this.lastRebuild = { matchId, path, at: new Date().toISOString() };
     return state;
   }
 
-  /** Snapshot + tail replay with a full-replay fallback. */
-  private replayFrom(stored: StoredMatch): MatchState {
+  /** Snapshot + suffix replay, with a full-replay fallback. */
+  private async rebuildFromSuffix(
+    matchId: string,
+    stored: StoredMatch,
+  ): Promise<{ state: MatchState; path: RebuildPath }> {
     const snapshot = latestUsableSnapshot(stored);
-    if (snapshot && commandsConsistentUpTo(stored.commands, snapshot.revision)) {
-      const tail = stored.commands
-        .filter((c) => (c.resultRevision ?? 0) > snapshot.revision)
-        .map((c) => c.command);
-      return replayCommands(structuredClone(snapshot.state), tail);
+    if (!snapshot) {
+      // No usable snapshot: read the whole log and replay from the beginning.
+      const full = await this.backend.load(matchId);
+      if (!full) throw new Error("match not found during rebuild");
+      return {
+        state: replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command)),
+        path: "full-replay",
+      };
     }
-    return replayCommands(structuredClone(stored.initial), stored.commands.map((c) => c.command));
+    const suffix = await this.backend.readCommandsAfter(matchId, {
+      afterRevision: snapshot.revision,
+      ...(snapshot.seq !== undefined ? { afterSeq: snapshot.seq } : {}),
+    });
+    if (!suffixIsComplete(suffix, snapshot)) {
+      const full = await this.backend.load(matchId);
+      if (!full) throw new Error("match not found during rebuild");
+      return {
+        state: replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command)),
+        path: "full-replay",
+      };
+    }
+    return {
+      state: replayCommands(structuredClone(snapshot.state), suffix.commands.map((c) => c.command)),
+      path: "suffix",
+    };
   }
 
   private applyAndPersist(
@@ -332,7 +395,14 @@ export class PersistentMatchStore {
     stored.commands.push({ command, commandId, actorPlayerId, at: new Date().toISOString(), resultRevision: next.revision });
     stored.seenCommandIds.push(commandId);
     if (stored.commands.length % SNAPSHOT_EVERY_COMMANDS === 0) {
-      stored.snapshots.push({ revision: next.revision, state: structuredClone(next), at: new Date().toISOString() });
+      // `seq` is the count of commands already applied, so a suffix read can
+      // start at exactly the next sequence.
+      stored.snapshots.push({
+        revision: next.revision,
+        seq: stored.commands.length,
+        state: structuredClone(next),
+        at: new Date().toISOString(),
+      });
       if (stored.snapshots.length > 8) stored.snapshots.shift();
     }
     this.touch(stored);
@@ -385,7 +455,11 @@ export class PersistentMatchStore {
 
   private syncMeta(stored: StoredMatch, live: MatchState): void {
     const cancelled = stored.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT");
-    stored.meta = { status: cancelled ? "CANCELLED" : live.status, stateRevision: live.revision };
+    stored.meta = {
+      status: cancelled ? "CANCELLED" : live.status,
+      stateRevision: live.revision,
+      totalCommands: stored.commands.length,
+    };
   }
 }
 
