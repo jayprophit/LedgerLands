@@ -174,6 +174,10 @@ LAST_REMOTE_VERIFIED_COMMIT = none
       that fails loud, and inert/mock adapters for the future provider set (docs/AUTH.md).
 - [x] 2v2 team economics specified with open product decisions (docs/DESIGN/TEAM_2V2.md);
       implementation deliberately deferred until those are answered.
+- [x] Postgres SQL verified against a real engine (PGlite): schema, jsonb, both unique
+      constraints, rollback atomicity, and EXPLAIN-confirmed index use on the suffix read.
+- [x] Snapshot suffix off-by-one fixed — it was silently forcing every Postgres rebuild
+      down the full-replay path (docs/PERSISTENCE.md).
 - [x] Replay tamper-evidence documented precisely (docs/REPLAY.md).
 - [x] Optional replay signing via a pluggable `ReplaySigner`; off by default, no key committed.
 - [x] Simulated dispute workflow bound to filed replay hashes (revalidate + audit trail).

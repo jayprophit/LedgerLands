@@ -99,8 +99,8 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **194 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
-Breakdown: game-engine 27 · match-store 40 · tournaments 36 · marketplace 21 ·
+Totals: **206 tests PASS** (1 skipped: networked-Postgres race) + **3/3 E2E**.
+Breakdown: game-engine 27 · match-store 52 · tournaments 36 · marketplace 21 ·
 auth 19 · matchmaking 15 · api 16 · blockchain 10 · ranked 4 · ledger 3 ·
 game-ai 3.
 
@@ -133,15 +133,21 @@ breakdown never matched the stated total.
 | Marketplace auctions | min increments, injected server clock, late bid still settleable, cancel is terminal | included above |
 | Marketplace bundles | all-or-nothing: pre-flight validation, transfer only after all legs | included above |
 | Auth hardening | `AuthService` (anti-replay session counters), `MfaService`, `ProductionGuard` (fails loud on dev-in-production), inert/mock adapters for the future provider set, server-side step-up endpoint | 19 auth tests (+16), 16 API tests (+1) |
+| Postgres verified on a real engine | PGlite (PostgreSQL/WASM) harness running the backend contract against real DDL, real constraints, real planner; fixed a suffix off-by-one that forced full replay | 12 match-store tests (+12) |
 
 ## Known issues (current)
 
-1. **Live PostgreSQL verification BLOCKED** — no service reachable here.
-   `PostgresBackend` is unit-tested against a constraint-faithful fake; enabling
-   the real path is documented in `docs/audit/THIRD_PASS_CHECKPOINT.md`.
-2. **Postgres partial I/O is unproven** — the indexed range query is
-   implemented and unit-tested against a query-recording fake, but no live DB
-   has run it. Confirm with `EXPLAIN` when one is available.
+1. **Postgres concurrency interleaving is still unverified** — no networked
+   server in this environment. Everything that does not need two connections is
+   now verified against a **real PostgreSQL engine** (PGlite, WASM): schema
+   validity, `jsonb` storage, both unique constraints, transactional rollback,
+   and an `EXPLAIN` proving the suffix range query uses
+   `MatchCommand_matchId_seq_idx`. PGlite serializes transactions, so only the
+   race itself remains. See `docs/PERSISTENCE.md`.
+2. **Postgres partial I/O is measured, not assumed** — 23.3 ms for a 500-row
+   suffix vs 143.1 ms for a 5,000-row full read, on 25,000 rows, with the
+   planner choosing a bitmap index scan. Reproduce with
+   `node scripts/bench-postgres.mjs`.
 3. **FileBackend still has no partial physical I/O** (single JSON document per
    match). Logical suffix selection only; a segmented format needs versioning +
    migration, so compatibility was kept. See `docs/PERSISTENCE.md`.

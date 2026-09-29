@@ -43,7 +43,7 @@ verified without a second round trip.
 |---|---|---|---|---|
 | `MemoryBackend` | logical range query over an in-memory array | n/a (no I/O) | no | no |
 | `FileBackend` | **logical** — file is parsed, then filtered | **no** | yes (local) | no |
-| `PostgresBackend` | **true indexed range query** on `(matchId, seq)` | yes | yes | yes (transactional) |
+| `PostgresBackend` | **true indexed range query** on `(matchId, seq)` | yes (verified) | yes | yes (transactional) |
 
 `FileBackend` stores one atomically-renamed JSON document per match, so the file
 must be read and parsed in full before any suffix can be extracted. This is
@@ -51,6 +51,44 @@ explicitly *logical* suffix selection, not partial file I/O, and is documented a
 such in the code. Changing to an append-only or segmented format would enable
 real partial reads but requires a format version and migration; compatibility
 was chosen for this milestone.
+
+## Verification against a real PostgreSQL engine
+
+`packages/match-store/test/postgres-pglite.test.ts` runs the same behavioural
+contract as the unit tests, but against **PGlite** — PostgreSQL compiled to
+WASM, so the real planner and the real constraint enforcement are involved.
+The DDL in `test/ddl.ts` mirrors `prisma/schema.prisma` by hand.
+
+What this proves:
+
+- the SQL is valid and the schema matches the Prisma model;
+- state is stored as `jsonb`, not a double-encoded string;
+- the `(matchId, seq)` and `(matchId, commandId)` unique constraints really do
+  reject the collisions the append guard and idempotency depend on;
+- a transaction that fails part-way leaves **no** partial rows;
+- the suffix range query is served by `MatchCommand_matchId_seq_idx`, asserted
+  with `EXPLAIN` — no `Seq Scan`;
+- a snapshot-backed rebuild takes the `"suffix"` path and produces a state
+  identical to the memory backend.
+
+What it does **not** prove: concurrent-writer interleaving. PGlite is
+single-connection, so transactions serialize where a real server could
+interleave two writers between `SELECT` and `INSERT`. The unique index is what
+stops that race, and that the index exists and is enforced is verified here — but
+the interleaving itself still needs a networked server to observe.
+
+### The bug this found
+
+`snapshot.seq` is the **count** of commands a snapshot covers, and commands are
+stored zero-indexed (`seq = 0..n-1`), so the first command after a snapshot sits
+at `seq === snapshot.seq`. The range query used `seq > snapshot.seq`, which
+skipped that row. The caller's gap-free check then failed and every
+snapshot-backed rebuild silently fell back to full replay — correct results, no
+performance benefit, no error. `MemoryBackend` ignores `afterSeq` and filters by
+revision, so no existing test could see it.
+
+Fixed in `postgres.ts` (`gtSeq: afterSeq - 1`) with a regression test that
+asserts `lastRebuild.path === "suffix"`.
 
 ## Reconstruction
 
@@ -97,9 +135,12 @@ Two writers racing on the same next sequence cannot both commit: one wins, the
 other is told to reload and retry. Crash-then-retry cannot duplicate a command
 because identity is persisted.
 
-**Live PostgreSQL verification: BLOCKED** in the current environment. Unit tests
-use a constraint-faithful fake that enforces the same unique constraints and
-records the range queries issued. See `docs/audit/THIRD_PASS_CHECKPOINT.md`.
+The constraint half of that claim is now verified against a real PostgreSQL
+engine (PGlite): duplicate `(matchId, seq)` and duplicate `(matchId, commandId)`
+inserts are rejected with SQLSTATE 23505, and a mid-transaction failure rolls
+back cleanly. The **interleaving** half still needs a networked server, because
+PGlite serializes transactions. The `DATABASE_URL` test remains skipped here and
+is the right place to close that last gap.
 
 ## Snapshots
 
@@ -111,7 +152,10 @@ records the range queries issued. See `docs/audit/THIRD_PASS_CHECKPOINT.md`.
 ## Known gaps
 
 1. No physical partial reads on `FileBackend` (see table).
-2. Postgres partial-I/O benefit unproven without a live DB; confirm with `EXPLAIN`.
-3. Replay exports are tamper-evident but unsigned; see `docs/REPLAY.md`.
-4. Header read still loads every snapshot row; fine at 8 retained, revisit if
+2. Postgres **concurrent-writer interleaving** is unverified — no networked server
+   here. Constraints and the index are verified; the race itself is not.
+3. `test/ddl.ts` is hand-kept in sync with `prisma/schema.prisma`. It is a second
+   source of truth and can drift; a Prisma-generated migration is the fix.
+4. Replay exports are tamper-evident but unsigned; see `docs/REPLAY.md`.
+5. Header read still loads every snapshot row; fine at 8 retained, revisit if
    retention grows.

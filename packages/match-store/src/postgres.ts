@@ -290,7 +290,13 @@ export class PostgresBackend implements StorageBackend {
   async readCommandsAfter(matchId: string, range: CommandRange): Promise<SuffixReadResult> {
     return this.prisma.$transaction(async (tx) => {
       const rows = await tx.matchCommand.listRange(matchId, {
-        ...(range.afterSeq !== undefined ? { gtSeq: range.afterSeq } : {}),
+        // `afterSeq` is the COUNT of commands a snapshot already covers, and
+        // commands are stored zero-indexed (`seq = 0..n-1`). The first command
+        // after the snapshot therefore sits at `seq === afterSeq`, so the
+        // exclusive SQL bound has to be one lower. Using `> afterSeq` silently
+        // dropped that row, which failed the caller's gap-free check and made
+        // every snapshot rebuild fall back to full replay.
+        ...(range.afterSeq !== undefined ? { gtSeq: range.afterSeq - 1 } : {}),
         ...(range.throughSeq !== undefined ? { ltSeq: range.throughSeq } : {}),
         ...(range.limit !== undefined ? { limit: range.limit } : {}),
       });

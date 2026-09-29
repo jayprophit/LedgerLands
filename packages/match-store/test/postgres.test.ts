@@ -262,7 +262,11 @@ describe("PostgresBackend live integration", () => {
     expect(typeof createMatchState).toBe("function");
     if (!url) {
       // eslint-disable-next-line no-console
-      console.warn("BLOCKED: no DATABASE_URL; live Postgres verification not run. Unit coverage above uses a constraint-faithful fake.");
+      console.warn(
+        "BLOCKED: no DATABASE_URL, so the *interleaving* half of the concurrency claim is unverified. " +
+          "Constraints, rollback, and index use are verified against a real engine in postgres-pglite.test.ts; " +
+          "PGlite serializes transactions, so only a networked server can race two writers.",
+      );
     }
   });
 });

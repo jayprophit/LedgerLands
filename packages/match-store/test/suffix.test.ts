@@ -251,9 +251,12 @@ describe("suffix read contract", () => {
       ...(snap.seq !== undefined ? { afterSeq: snap.seq } : {}),
     });
     expect(suffix.commands.length).toBeGreaterThan(0);
-    // The range query was issued with the snapshot's sequence bound.
+    // The range query was issued with the snapshot's sequence bound. `snap.seq`
+    // is the COUNT of commands the snapshot covers and rows are stored
+    // zero-indexed, so the exclusive SQL bound is one lower — using `snap.seq`
+    // skipped the first tail command and forced a full-replay fallback.
     expect(fake.rangeQueries).toHaveLength(1);
-    expect(fake.rangeQueries[0]!.gtSeq).toBe(snap.seq);
+    expect(fake.rangeQueries[0]!.gtSeq).toBe(snap.seq! - 1);
     // And it returned fewer rows than the full log.
     expect(suffix.commands.length).toBeLessThan(suffix.totalCommands);
   });

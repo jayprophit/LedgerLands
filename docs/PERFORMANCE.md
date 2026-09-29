@@ -12,6 +12,33 @@ Commands: `node scripts/bench.mjs`, `node scripts/profile-engine.mjs`
 | Rebuild (snapshot + suffix, cache cleared) | 20 rebuilds, 1 match | 266 ms (≈13 ms/rebuild, was ≈161 ms) |
 | FileBackend recovery after restart | 1 match | 24 ms (was 558 ms) |
 | Replay export (hash chain) | 754 events | 38 ms |
+| Postgres suffix read (real engine) | 5 matches × 5,000 commands | 23.3 ms vs 143.1 ms full read |
+
+### Postgres suffix read, measured against a real PostgreSQL engine
+
+`node scripts/bench-postgres.mjs` (PGlite — real PostgreSQL compiled to WASM,
+same planner and constraint enforcement, no network):
+
+| Query | Result |
+|---|---|
+| Suffix range, tail 10% (500 of 5,000 rows) | **23.3 ms** |
+| Full log read (5,000 rows) | 143.1 ms |
+| Ratio | **0.163** |
+
+The planner's own choice for the range query:
+
+```
+Bitmap Heap Scan on "MatchCommand"
+  Recheck Cond: (("matchId" = 'm0') AND (seq > 4499))
+  ->  Bitmap Index Scan on "MatchCommand_matchId_seq_idx"
+        Index Cond: (("matchId" = 'm0') AND (seq > 4499))
+```
+
+So the `(matchId, seq)` index is used and the partial-read claim is real, not
+aspirational. This also found a live off-by-one: the range bound was one too
+high, so the first command after a snapshot was skipped, the caller's
+gap-free check failed, and every snapshot rebuild silently degraded to full
+replay. Fixed in `postgres.ts`; see `docs/PERSISTENCE.md`.
 
 ### Rebuild path comparison (429-command match)
 
@@ -89,7 +116,9 @@ This is a real design limit, not a tuning miss, and it has not been fixed:
 Until then the honest mitigation is the one already in place: **keep
 snapshots**. A snapshot short-circuits the quadratic path on rebuild, and
 `PostgresBackend` avoids it on the write side entirely by storing one row per
-command.
+command. That second claim is now measurable: against a real engine, fetching
+the 10% tail of a 5,000-command match costs 23.3 ms against 143.1 ms for the
+whole log.
 
 2. **FileBackend still rewrites the entire record per command** — O(commands²)
    bytes on disk. Local durability stand-in only, not a production store.
@@ -106,10 +135,12 @@ command.
    Measured: full replay 615 ms → suffix rebuild 19–24 ms on a 429-command
    match.
 
-4. **Postgres partial I/O is unproven in this environment.** The range query is
-   implemented and unit-tested against a fake that records the issued query, but
-   no live database has run it. Real gains depend on the `(matchId, seq)` index
-   actually being used by the planner — verify with `EXPLAIN` once a DB exists.
+4. **~~Postgres partial I/O is unproven~~ — verified against a real engine.**
+   The range query now runs against PGlite (real PostgreSQL in WASM) and the
+   planner picks `Bitmap Index Scan on MatchCommand_matchId_seq_idx`. Measured
+   23.3 ms for a 500-row suffix vs 143.1 ms for the full 5,000-row read, on
+   25,000 rows. What remains unverified is concurrent-writer interleaving,
+   because PGlite is single-connection and serializes transactions.
 
 5. **FileBackend cannot do partial physical I/O.** One atomically-renamed JSON
    document per match means the whole file is parsed before any suffix can be
