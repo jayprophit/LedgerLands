@@ -4,3 +4,4 @@ export * from "./rules.js";
 export * from "./rng.js";
 export * from "./cards.js";
 export * from "./clone.js";
+export * from "./teams.js";

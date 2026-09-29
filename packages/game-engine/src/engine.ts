@@ -2,30 +2,51 @@ import type {
   BoardTile,
   GameCommand,
   GameEvent,
+  MatchMode,
   MatchState,
   PlayerId,
   PlayerState,
   PropertyState,
+  TeamState,
   TradeState,
 } from "@ledgerlands/shared-types";
 import { DEFAULT_BOARD, DETENTION_INDEX } from "./board.js";
 import { drawCardIndex, SIGNAL_DECK } from "./cards.js";
 import { getRuleset, type Ruleset } from "./rules.js";
 import { cloneMatchState, type MatchStateCloner } from "./clone.js";
+import {
+  aliveTeams,
+  areTeammates,
+  isTeamMatch,
+  newlyEliminatedTeam,
+  seatAlternatingTeams,
+  teamIdOf,
+  validateTeams,
+} from "./teams.js";
 
 export interface EngineOptions {
   board?: readonly BoardTile[];
   passStartReward?: number;
   detentionFine?: number;
   rulesetVersion?: string;
+  /**
+   * Default per-player starting balance when a seat does not specify one.
+   * D5: a team never splits this between teammates — every player gets it in
+   * full, because teams pool nothing.
+   */
+  startingBalance?: number;
 }
 
 const DEFAULT_OPTIONS: Required<Omit<EngineOptions, "rulesetVersion">> & { rulesetVersion: string } = {
   board: DEFAULT_BOARD,
   passStartReward: 200,
   detentionFine: 50,
+  startingBalance: 15000,
   rulesetVersion: "classic-v1",
 };
+
+/** Ruleset id that carries the 2v2 team rule set. */
+export const TEAM_RULESET_VERSION = "team-v1";
 
 export class GameRuleError extends Error {
   readonly code: string;
@@ -50,6 +71,9 @@ export function createMatchState(params: {
   seed: number;
   players: Array<{ id: string; name: string; balance?: number }>;
   options?: EngineOptions;
+  /** Team mode. Absent or undefined means individual play. */
+  teams?: TeamState[];
+  mode?: MatchMode;
 }): MatchState {
   const options = { ...DEFAULT_OPTIONS, ...params.options };
   if (params.players.length < 1 || params.players.length > 4) {
@@ -63,17 +87,41 @@ export function createMatchState(params: {
     }
   }
 
-  const players: PlayerState[] = params.players.map((p) => ({
+  // Seating is authoritative state, not presentation. In a team match the seat
+  // order is round-robined across teams so consecutive turns belong to
+  // different teams (A1 B1 A2 B2), then validated before anything is built.
+  const teams = params.teams;
+  const seated = teams && teams.length > 0 ? seatAlternatingTeams(params.players, teams) : params.players;
+  if (teams && teams.length > 0) {
+    // `players` here is the seat list, whose shape is narrower than PlayerState.
+    const seats = seated as unknown as MatchState["players"];
+    const issues = validateTeams({
+      players: seats,
+      teams,
+      ...(params.mode ? { mode: params.mode } : {}),
+    });
+    if (issues.length > 0) {
+      const first = issues[0]!;
+      throw new GameRuleError("INVALID_TEAM_SETUP", `${first.code}: ${first.detail}`);
+    }
+  }
+
+  const players: PlayerState[] = seated.map((p) => ({
     id: p.id,
     name: p.name,
     position: 0,
-    balance: p.balance ?? 15000,
+    // D5: every player starts with the full standard balance. Balances are never
+    // pooled, so there is nothing to split.
+    balance: p.balance ?? options.startingBalance,
     inDetention: false,
     detentionTurns: 0,
     doublesStreak: 0,
     bankrupt: false,
     detentionCards: 0,
   }));
+
+  const isTeam = teams !== undefined && teams.length > 0;
+  const rules = getRuleset(isTeam ? TEAM_RULESET_VERSION : options.rulesetVersion);
 
   return {
     id: params.id,
@@ -90,7 +138,14 @@ export function createMatchState(params: {
     log: [],
     trades: [],
     deckCursor: 0,
-    rulesetVersion: options.rulesetVersion,
+    rulesetVersion: rules.version,
+    ...(isTeam
+      ? {
+          mode: (params.mode ?? "TEAM_2V2") as MatchMode,
+          teams: teams!.map((t) => ({ ...t, memberIds: [...t.memberIds], eliminated: false })),
+          teamRules: rules.teamRules,
+        }
+      : {}),
   };
 }
 
@@ -162,6 +217,14 @@ function settleBankruptcy(state: MatchState, player: PlayerState, creditorId?: P
     pushEvent(state, { type: "AUCTION_COMPLETED", tileId });
   }
   pushEvent(state, { type: "PLAYER_BANKRUPT", playerId: player.id });
+  // D2: a team is eliminated only once EVERY member is out. One member going
+  // bankrupt leaves the team alive and its partner still playing.
+  const team = newlyEliminatedTeam(state);
+  if (team) {
+    team.eliminated = true;
+    team.eliminatedAtRevision = state.revision + 1;
+    pushEvent(state, { type: "TEAM_ELIMINATED", teamId: team.teamId });
+  }
   maybeCompleteMatch(state);
 }
 
@@ -169,13 +232,99 @@ function markBankruptIfNeeded(state: MatchState, player: PlayerState, creditorId
   settleBankruptcy(state, player, creditorId);
 }
 
+/**
+ * Close a match that has nobody left able to move.
+ *
+ * Reachable in team mode when every member of every team is eliminated: the
+ * team victory condition has no winner, and leaving the match ACTIVE would
+ * strand the current player with no legal command. Individual play is left
+ * alone so that existing behaviour is bit-for-bit unchanged; a solo match with
+ * a single bankrupt player is already completed by `maybeCompleteMatch`.
+ */
+function finalizeIfDead(state: MatchState): void {
+  if (state.status !== "ACTIVE") return;
+  if (state.players.length < 2) return;
+  if (state.players.some((p) => !p.bankrupt)) return;
+  state.status = "COMPLETED";
+  pushEvent(state, { type: "MATCH_COMPLETED" });
+}
+
 function activePlayers(state: MatchState): PlayerState[] {
   return state.players.filter((p) => !p.bankrupt);
 }
 
+/** In-place seat normalisation; see `normalizeSeat` for why this exists. */
+function normalizeCurrentSeat(state: MatchState): void {
+  if (state.status !== "ACTIVE") return;
+  if (state.players.length < 2) return;
+  for (let i = 0; i < state.players.length; i += 1) {
+    if (!state.players[state.currentPlayerIndex]!.bankrupt) return;
+    state.currentPlayerIndex = (state.currentPlayerIndex + 1) % state.players.length;
+  }
+}
+
+/**
+ * Make a restored or recovered state playable again.
+ *
+ * Two things can leave a state that no command can advance:
+ *
+ *  - a bankrupt player holding the current seat. `advanceTurn` skips bankrupt
+ *    seats but is only reachable from inside a command;
+ *  - a match with nobody solvent at all.
+ *
+ * Both matter on the RESTORE path — a snapshot, a reconnect, a crash recovery —
+ * where the state comes back from storage rather than from a command. Fixing
+ * them inside `applyCommand` is not enough: it is pure, so a command that
+ * rejects the state throws and discards its clone, taking the repair with it.
+ *
+ * Individual play keeps its original win condition untouched; a single-player
+ * match is already handled by `maybeCompleteMatch`.
+ */
+export function normalizeSeat(state: MatchState): MatchState {
+  if (state.status !== "ACTIVE") return state;
+  if (state.players.length < 2) return state;
+  const seatBankrupt = state.players[state.currentPlayerIndex]?.bankrupt === true;
+  const nobodySolvent = state.players.every((p) => p.bankrupt);
+  if (!seatBankrupt && !nobodySolvent) return state;
+
+  const next = cloneMatchState(state);
+  if (nobodySolvent) {
+    next.status = "COMPLETED";
+    // Recorded as a completed match with no winner: there is nobody left to
+    // declare one, and leaving it ACTIVE would wedge the restore.
+    next.revision += 1;
+    next.log.push({ type: "MATCH_COMPLETED", atRevision: next.revision } as GameEvent);
+    return next;
+  }
+  normalizeCurrentSeat(next);
+  return next;
+}
+
 function maybeCompleteMatch(state: MatchState): void {
+  if (state.status !== "ACTIVE") return;
+  // D3: in a team match the last team with a solvent member wins. Timed or
+  // score-based victory is deliberately not implemented; if it is ever added it
+  // needs its own ruleset version rather than an implicit fallback here.
+  if (isTeamMatch(state)) {
+    const alive = aliveTeams(state);
+    if (alive.length === 1) {
+      const winner = alive[0]!;
+      state.status = "COMPLETED";
+      state.winnerTeamId = winner.teamId;
+      pushEvent(state, { type: "MATCH_COMPLETED", winnerTeamId: winner.teamId });
+      return;
+    }
+    if (alive.length === 0) {
+      // Every member of every team is out. Nobody wins, but the match must
+      // still close: leaving it ACTIVE would strand the current player with no
+      // legal command and no way to end.
+      state.status = "COMPLETED";
+      pushEvent(state, { type: "MATCH_COMPLETED" });
+    }
+    return;
+  }
   const active = activePlayers(state);
-  if (state.status === "ACTIVE" && state.players.length > 1 && active.length === 1) {
+  if (state.players.length > 1 && active.length === 1) {
     state.status = "COMPLETED";
     state.winnerId = active[0]!.id;
     pushEvent(state, { type: "MATCH_COMPLETED", winnerId: active[0]!.id });
@@ -320,6 +469,20 @@ function resolveLandingSimple(state: MatchState, player: PlayerState, board: rea
   const property = state.properties[tile.id];
   if (property?.ownerId && property.ownerId !== player.id && !property.mortgaged) {
     const owner = getPlayer(state, property.ownerId);
+    // D1: a teammate pays nothing, and the exemption is recorded. Silently
+    // skipping the transfer would make a no-op indistinguishable from a bug in
+    // an audit trail.
+    const teammateTeam = areTeammates(state, player.id, owner.id) ? teamIdOf(state, player.id) : undefined;
+    if (teammateTeam !== undefined) {
+      pushEvent(state, {
+        type: "TEAMMATE_RENT_EXEMPT",
+        playerId: player.id,
+        teammateId: owner.id,
+        teamId: teammateTeam,
+        tileId: tile.id,
+      });
+      return;
+    }
     const amount = rentFor(state, tile, property, rules, board);
     player.balance -= amount;
     owner.balance += amount;
@@ -421,6 +584,11 @@ export function applyCommand(
   if (!state.trades) state.trades = [];
   if (state.deckCursor === undefined) state.deckCursor = 0;
   if (!state.rulesetVersion) state.rulesetVersion = options.rulesetVersion;
+  // A bankrupt player must never hold the turn, and a match with nobody left
+  // must not stay open. Cheap here for states that are already fine; the real
+  // repair for a restored state is `normalizeSeat` on the load path.
+  normalizeCurrentSeat(state);
+  finalizeIfDead(state);
   const rules = resolveRules(state.rulesetVersion, options);
 
   if (command.type === "START_MATCH") {

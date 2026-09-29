@@ -62,6 +62,65 @@ export interface PlayerState {
 
 export type MatchStatus = "LOBBY" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
+/**
+ * Match shape. `TEAM_2V2` is the first team mode; the others are individual
+ * modes and are unaffected by any team rule.
+ */
+export type MatchMode = "SOLO" | "FREE_FOR_ALL" | "TEAM_2V2";
+
+export type TeamId = string;
+
+/**
+ * A team owns victory, not economy. Members keep their own balances, property,
+ * mortgages, development and jail state. A team is eliminated only once every
+ * member has been eliminated.
+ */
+export interface TeamState {
+  teamId: TeamId;
+  memberIds: PlayerId[];
+  eliminated: boolean;
+  eliminatedAtRevision?: number;
+}
+
+/**
+ * The team rule set, stated explicitly rather than scattered through
+ * conditionals. Every field is a decision, not a default: a future variant
+ * (shared treasury, shared property, team loans) is a different value here, not
+ * a different engine.
+ */
+export interface TeamRules {
+  /** Wallets are never pooled. */
+  economy: "INDIVIDUAL";
+  /** Property is owned by the individual player who bought it. */
+  propertyOwnership: "INDIVIDUAL";
+  /** A teammate landing on a teammate's property pays nothing. */
+  teammateRent: "EXEMPT";
+  /** Bankruptcy is resolved per player, creditor-aware, as in free-for-all. */
+  bankruptcy: "INDIVIDUAL";
+  /** A team is out only when all of its members are out. */
+  elimination: "ALL_MEMBERS";
+  /** The last team with a solvent member wins. No timed scoring. */
+  victory: "LAST_SOLVENT_TEAM";
+  /** Everyone, including teammates, bids and settles as themselves. */
+  auctionParticipation: "INDIVIDUAL";
+  /** Teammates may trade, through the ordinary propose/validate/accept path. */
+  teammateTrading: "ALLOWED";
+  /** Each player starts with the full standard ruleset balance. */
+  startingBalance: "STANDARD_PER_PLAYER";
+}
+
+export const TEAM_2V2_RULES: TeamRules = {
+  economy: "INDIVIDUAL",
+  propertyOwnership: "INDIVIDUAL",
+  teammateRent: "EXEMPT",
+  bankruptcy: "INDIVIDUAL",
+  elimination: "ALL_MEMBERS",
+  victory: "LAST_SOLVENT_TEAM",
+  auctionParticipation: "INDIVIDUAL",
+  teammateTrading: "ALLOWED",
+  startingBalance: "STANDARD_PER_PLAYER",
+};
+
 export interface AuctionBid {
   playerId: PlayerId;
   amount: number;
@@ -118,6 +177,18 @@ export interface MatchState {
   deckCursor?: number;
   /** Versioned ruleset id, e.g. "classic-v1". Defaults to classic-v1 when absent. */
   rulesetVersion?: string;
+  /**
+   * Match shape. Absent or `FREE_FOR_ALL` means individual play, and every
+   * team rule is inert. Seating order is the `players` array order, so an
+   * alternating team seating is authoritative state, not a display concern.
+   */
+  mode?: MatchMode;
+  /** Present only in team modes. */
+  teams?: TeamState[];
+  /** The rule set in force. Recorded on the state so a replay cannot change it. */
+  teamRules?: TeamRules;
+  /** Set when a team wins. Absent in individual modes. */
+  winnerTeamId?: TeamId;
 }
 
 export type GameCommand =
@@ -168,7 +239,11 @@ export type GameEvent =
   | { type: "PLAYER_BANKRUPT"; playerId: PlayerId; atRevision: number }
   | { type: "PLAYER_SURRENDERED"; playerId: PlayerId; atRevision: number }
   | { type: "TURN_ENDED"; playerId: PlayerId; nextPlayerId?: PlayerId; atRevision: number }
-  | { type: "MATCH_COMPLETED"; winnerId: PlayerId; atRevision: number };
+  | { type: "MATCH_COMPLETED"; winnerId?: PlayerId; winnerTeamId?: TeamId; atRevision: number }
+  // Team mode. A teammate landing on a teammate's property is charged nothing,
+  // and the exemption is recorded rather than silently swallowed.
+  | { type: "TEAMMATE_RENT_EXEMPT"; playerId: PlayerId; teammateId: PlayerId; teamId: TeamId; tileId: TileId; atRevision: number }
+  | { type: "TEAM_ELIMINATED"; teamId: TeamId; atRevision: number };
 
 export interface MatchCreateRequest {
   playerName: string;
@@ -187,7 +262,7 @@ export interface MatchCommandRequest {
 }
 
 /** Versioned ruleset id. `classic-v1` is the MVP default. */
-export type RulesetVersion = "classic-v1" | "ranked-v1" | "quick-v1";
+export type RulesetVersion = "classic-v1" | "ranked-v1" | "quick-v1" | "team-v1";
 
 export type RarityTier =
   | "COMMON"

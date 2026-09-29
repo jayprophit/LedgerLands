@@ -12,8 +12,15 @@
  * genuine engine command, so the oracle still exercises real rule code.
  */
 
-import { applyCommand, createMatchState, DEFAULT_BOARD } from "../../src/index.js";
-import type { GameCommand, GameEvent, MatchState, PlayerId, TileId } from "@ledgerlands/shared-types";
+import { applyCommand, createMatchState, DEFAULT_BOARD, normalizeSeat } from "../../src/index.js";
+import type {
+  GameCommand,
+  GameEvent,
+  MatchState,
+  PlayerId,
+  TeamState,
+  TileId,
+} from "@ledgerlands/shared-types";
 
 export interface FixturePlayer {
   id: PlayerId;
@@ -54,6 +61,12 @@ export class FixtureDriver {
 
   static create(players: FixturePlayer[], seed: number, id = "oracle"): FixtureDriver {
     const state = createMatchState({ id, seed, players });
+    return new FixtureDriver(state);
+  }
+
+  /** A 2v2 match. Seating is alternating-team, decided by the engine. */
+  static createTeams(players: FixturePlayer[], teams: TeamState[], seed: number, id = "oracle-teams"): FixtureDriver {
+    const state = createMatchState({ id, seed, players, teams, mode: "TEAM_2V2" });
     return new FixtureDriver(state);
   }
 
@@ -131,6 +144,31 @@ export class FixtureDriver {
   setCurrentPlayer(index: number): this {
     return this.seam(`currentPlayer=${index}`, (state) => {
       state.currentPlayerIndex = index;
+    });
+  }
+
+  /** Jail a player without waiting for three doubles. */
+  bankrupt(playerId: PlayerId): this {
+    this.seam(`${playerId} bankrupt`, (state) => {
+      const p = state.players.find((x) => x.id === playerId);
+      if (!p) throw new Error(`unknown player ${playerId}`);
+      p.bankrupt = true;
+      p.balance = 0;
+    });
+    // A bankrupt seat must not hold the turn. `applyCommand` cannot fix this for
+    // us because a rejected command discards its clone, so the seat is
+    // normalised here, as the store's restore path does.
+    return this.normalizeSeat();
+  }
+
+  /** Skip a bankrupt player in the current seat, as the restore path does. */
+  normalizeSeat(): this {
+    return this.seam("normalizeSeat", (state) => {
+      const fixed = normalizeSeat(state);
+      state.currentPlayerIndex = fixed.currentPlayerIndex;
+      state.status = fixed.status;
+      state.revision = fixed.revision;
+      state.log = fixed.log;
     });
   }
 
@@ -233,8 +271,28 @@ export class FixtureDriver {
   rollOnto(tileId: string, playerId?: PlayerId): boolean {
     if (!this.ensureRollPhase(playerId)) return false;
     if (!this.seekTile(tileId)) return false;
+    // Capture the roller: a roll can end the turn (jail, bankruptcy), so
+    // checking the *current* player afterwards would read the wrong seat.
+    const roller = this.player.id;
     this.roll();
-    return this.tileIdAt(this.player.position) === tileId;
+    const landedOn = this.state.players.find((p) => p.id === roller)?.position;
+    return landedOn !== undefined && this.tileIdAt(landedOn) === tileId;
+  }
+
+  /**
+   * Sats credited by the most recent command for passing the origin corner.
+   *
+   * A roll onto a low-numbered tile necessarily crosses the corner, so a test
+   * asserting an exact balance delta has to account for this. Ignoring it was a
+   * real source of false failures here.
+   */
+  lastPassReward(): number {
+    const last = this.commands.at(-1);
+    if (!last) return 0;
+    return last.events.reduce(
+      (sum, e) => (e.type === "PASSED_START" || e.type === "CARD_DRAWN" ? sum + (e.amount ?? 0) : sum),
+      0,
+    );
   }
 
   /** Leave jail by paying, if possible. */

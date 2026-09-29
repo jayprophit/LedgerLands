@@ -5,6 +5,7 @@ import {
   BOARD_VERSION,
   createMatchState,
   GameRuleError,
+  normalizeSeat,
   replayCommands,
   RULESET_VERSION,
 } from "@ledgerlands/game-engine";
@@ -341,7 +342,7 @@ export class PersistentMatchStore {
       // so a read never returns nothing just because a range query failed.
       const full = await this.backend.load(matchId);
       if (!full) return undefined;
-      state = replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command));
+      state = normalizeSeat(replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command)));
       path = "full-replay";
     }
     if (header.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT")) {
@@ -363,7 +364,7 @@ export class PersistentMatchStore {
       const full = await this.backend.load(matchId);
       if (!full) throw new Error("match not found during rebuild");
       return {
-        state: replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command)),
+        state: normalizeSeat(replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command))),
         path: "full-replay",
       };
     }
@@ -375,12 +376,12 @@ export class PersistentMatchStore {
       const full = await this.backend.load(matchId);
       if (!full) throw new Error("match not found during rebuild");
       return {
-        state: replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command)),
+        state: normalizeSeat(replayCommands(structuredClone(full.initial), full.commands.map((c) => c.command))),
         path: "full-replay",
       };
     }
     return {
-      state: replayCommands(structuredClone(snapshot.state), suffix.commands.map((c) => c.command)),
+      state: normalizeSeat(replayCommands(structuredClone(snapshot.state), suffix.commands.map((c) => c.command))),
       path: "suffix",
     };
   }
