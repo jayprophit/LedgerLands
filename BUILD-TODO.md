@@ -118,7 +118,9 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Rotating shop using non-withdrawable practice currency.
 - [x] Player marketplace sandbox (`packages/marketplace`: LIST/CANCEL/BUY, escrow-routed
       double-entry settlement, idempotency, self-buy/funds/expiry/double-purchase guards).
-- [ ] Marketplace offers / bids / auctions / bundles.
+- [x] Marketplace offers (asset-locking, party-restricted accept/reject/cancel/expiry).
+- [x] Marketplace auctions (min increments, injected server time, late-bid still settleable).
+- [x] Marketplace bundles (all-or-nothing, pre-flight validation before any leg).
 - [x] Offers/auctions/trades (in-match auctions + trades).
 - [x] Competitive-mode cosmetic-only enforcement.
 

@@ -99,9 +99,9 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **160 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
-Breakdown: engine 27 · match-store 40 · tournaments 36 · matchmaking 15 · api 15 ·
-ranked 4 · ledger 3 · ai 3 · auth 3 · marketplace 3.
+Totals: **178 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Breakdown: engine 27 · match-store 40 · tournaments 36 · marketplace 21 ·
+matchmaking 15 · api 15 · ranked 4 · ledger 3 · ai 3 · auth 3.
 
 ### LL-P17 performance (applied this pass)
 
@@ -124,6 +124,9 @@ ranked 4 · ledger 3 · ai 3 · auth 3 · marketplace 3.
 | Round-robin format | circle method, odd-field bye placeholder, round-completion gating, deterministic standings | included above |
 | Signed replay manifests | `ReplaySigner` (Ed25519 / HMAC-dev / unsigned), content-addressed `manifestHash` excluding `issuedAt`, key-id and tamper rejection | 17 new tests |
 | Dispute workflow | `DisputeService` — OPEN/UNDER_REVIEW/RESOLVED/REJECTED/CANCELLED, filed hashes, append-only history, `revalidate()`, duplicate-claim rejection | included above + 1 API test |
+| Marketplace offers | buyer-initiated, asset-locking, party-restricted lifecycle, revalidated at accept | 18 new marketplace tests |
+| Marketplace auctions | min increments, injected server clock, late bid still settleable, cancel is terminal | included above |
+| Marketplace bundles | all-or-nothing: pre-flight validation, transfer only after all legs | included above |
 
 ## Known issues (current)
 
@@ -142,8 +145,10 @@ ranked 4 · ledger 3 · ai 3 · auth 3 · marketplace 3.
 4. Replay export is **tamper-evident, not signed**; no dispute workflow
    service yet (`docs/REPLAY.md`).
 5. Matchmaking is O(n²) in queue length; fine for hundreds, not thousands.
-6. Marketplace offers/bids/bundles, non-dev auth providers, admin identity for
-   disputes, and 2v2 team economics remain NOT_STARTED. Dispute resolution is
-   simulated (role string, no identity provider) and signing is off by default.
+6. Non-dev auth providers, admin identity for disputes, and 2v2 team economics
+   remain NOT_STARTED. Dispute resolution is simulated (role string, no identity
+   provider) and replay signing is off by default.
+7. Marketplace state is in-memory; no listing/offer/auction persistence, and no
+   anti-sniping extension on auctions.
 7. `npm audit`: 0 production advisories; 4 high dev-only (documented, not
    force-fixed by policy).
