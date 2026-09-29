@@ -6,7 +6,12 @@ import { ConcurrencyError, MemoryBackend, PersistentMatchStore, type StorageBack
 import { DevAuthAdapter, type AuthPrincipal } from "@ledgerlands/auth";
 import { MarketplaceService, MarketplaceError, type MarketplaceAssetKind } from "@ledgerlands/marketplace";
 import { DoubleEntryLedger } from "@ledgerlands/ledger";
-import { MatchmakingError, MatchmakingService, type QueueName } from "@ledgerlands/matchmaking";
+import {
+  DurableMatchmakingService,
+  MatchmakingError,
+  MemoryMatchmakingStore,
+  type QueueName,
+} from "@ledgerlands/matchmaking";
 import { blankRating, leaderboard, settleHeadToHead, type PlayerRating } from "@ledgerlands/ranked";
 import { TournamentError, TournamentService } from "@ledgerlands/tournaments";
 import { PracticeLedger } from "./ledger.js";
@@ -30,7 +35,6 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
   const auth = new DevAuthAdapter(
     process.env.LEDGERLANDS_DEV_SECRET ? { secret: process.env.LEDGERLANDS_DEV_SECRET } : undefined,
   );
-  const matchmaking = new MatchmakingService();
   const marketLedger = new DoubleEntryLedger();
   const marketplace = new MarketplaceService(marketLedger);
   const subscriptions = new Map<string, Set<WebSocket>>();
@@ -291,7 +295,10 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
     return { principal };
   });
 
-  // ---- Matchmaking (queues form reservations; claim creates the authoritative match) ----
+  // ---- Matchmaking (durable queue; claim creates the authoritative match) ----
+  const matchmakingStore = new MemoryMatchmakingStore();
+  const durableMatchmaking = new DurableMatchmakingService(matchmakingStore);
+
   app.post<{ Body: { playerId?: string; displayName?: string; queue?: QueueName; rating?: number } }>(
     "/api/matchmaking/join",
     async (request, reply) => {
@@ -299,13 +306,13 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
         if (!request.body?.playerId || !request.body?.displayName || !request.body?.queue) {
           return reply.code(400).send({ error: "playerId, displayName and queue are required" });
         }
-        const { entry, position } = matchmaking.join({
+        const entry = await durableMatchmaking.join({
           playerId: request.body.playerId,
           displayName: request.body.displayName,
           queue: request.body.queue,
           rating: request.body.rating ?? 1500,
         });
-        return { entry, position };
+        return { entry };
       } catch (error) {
         return ruleError(reply, error);
       }
@@ -313,25 +320,40 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
   );
 
   app.post<{ Body: { playerId?: string; queue?: QueueName } }>("/api/matchmaking/leave", async (request) => ({
-    removed: matchmaking.leave(request.body?.playerId ?? "", request.body?.queue),
+    removed: await durableMatchmaking.leave(request.body?.playerId ?? "", request.body?.queue),
   }));
 
-  app.post("/api/matchmaking/tick", async () => ({ found: matchmaking.tick(Date.now()) }));
+  app.get<{ Querystring: { queue?: string } }>("/api/matchmaking/queue", async (request) => {
+    const queue = (request.query?.queue ?? "CASUAL_1V1") as QueueName;
+    return { queue, entries: await durableMatchmaking.queued(queue) };
+  });
 
-  app.post<{ Body: { reservationId?: string } }>("/api/matchmaking/claim", async (request, reply) => {
+  app.get<{ Params: { reservationId: string } }>("/api/matchmaking/reservations/:reservationId", async (request, reply) => {
+    const rows = await durableMatchmaking.reservation(request.params.reservationId);
+    if (rows.length === 0) return reply.code(404).send({ error: "reservation not found" });
+    return { reservationId: request.params.reservationId, entries: rows };
+  });
+
+  /**
+   * One matchmaking pass. Grouping, claiming, authoritative match creation and
+   * finalization all happen here so a client cannot forge a match.
+   */
+  app.post("/api/matchmaking/tick", async (request, reply) => {
     try {
-      if (!request.body?.reservationId) return reply.code(400).send({ error: "reservationId is required" });
-      const reservation = matchmaking.claim(request.body.reservationId);
-      // Create one authoritative multiplayer match for the reserved group.
-      const first = reservation.playerIds[0]!;
-      const created = await store.create({ playerName: first, solo: false });
-      const createdIds = [created.playerId];
-      for (const pid of reservation.playerIds.slice(1)) {
-        const joined = await store.join(created.match.id, pid);
-        createdIds.push(joined.playerId);
+      const created = await durableMatchmaking.tick(async ({ playerIds }) => {
+        const first = playerIds[0]!;
+        const started = await store.create({ playerName: first, solo: false });
+        for (const pid of playerIds.slice(1)) await store.join(started.match.id, pid);
+        await store.start(started.match.id);
+        return started.match.id;
+      });
+      const assignments = [];
+      for (const a of created) {
+        const match = await store.get(a.matchId);
+        assignments.push({ ...a, match });
       }
-      const match = await store.start(created.match.id);
-      return { reservation, match, playerIds: createdIds };
+      broadcast("matchmaking", { assignments });
+      return { assignments };
     } catch (error) {
       return ruleError(reply, error);
     }

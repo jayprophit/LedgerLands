@@ -257,6 +257,28 @@ model Ranking {
   @@unique([seasonId, userId, mode])
 }
 
+// Durable matchmaking queue. Explicit status enum (never booleans) plus a
+// version column used for compare-and-set claims by concurrent workers.
+model MatchmakingEntry {
+  entryId              String   @id @default(cuid())
+  playerId             String
+  queue                String
+  rating               Int      @default(1500)
+  displayName          String
+  status               String   @default("QUEUED")
+  joinedAt             DateTime @default(now())
+  reservationId        String?
+  reservationExpiresAt DateTime?
+  matchId              String?
+  version              Int      @default(1)
+  updatedAt            DateTime @updatedAt
+
+  @@unique([playerId, queue, status])
+  @@index([queue, status, joinedAt])
+  @@index([reservationId])
+  @@index([status, reservationExpiresAt])
+}
+
 model Quest {
   id          String          @id @default(cuid())
   code        String          @unique

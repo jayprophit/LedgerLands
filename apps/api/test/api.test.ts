@@ -160,12 +160,37 @@ describe("API integration", () => {
   it("matchmakes two players into an authoritative match", async () => {
     await post("/api/matchmaking/join", { playerId: "mm-a", displayName: "A", queue: "CASUAL_1V1" });
     await post("/api/matchmaking/join", { playerId: "mm-b", displayName: "B", queue: "CASUAL_1V1" });
+    // Queue state is durable and observable.
+    const queued = await app.inject({ method: "GET", url: "/api/matchmaking/queue?queue=CASUAL_1V1" });
+    expect((queued.json() as any).entries).toHaveLength(2);
+
     const tick = await post("/api/matchmaking/tick", {});
-    expect(tick.found).toHaveLength(1);
-    const claimed = await post("/api/matchmaking/claim", { reservationId: tick.found[0].reservationId });
-    expect(claimed.match.status).toBe("ACTIVE");
-    expect(claimed.match.players).toHaveLength(2);
-    expect(claimed.playerIds).toHaveLength(2);
+    expect(tick.assignments).toHaveLength(1);
+    const assignment = tick.assignments[0];
+    expect(assignment.playerIds.sort()).toEqual(["mm-a", "mm-b"]);
+    expect(assignment.match.status).toBe("ACTIVE");
+    expect(assignment.match.players).toHaveLength(2);
+
+    // A second tick must not create a duplicate match.
+    const again = await post("/api/matchmaking/tick", {});
+    expect(again.assignments).toHaveLength(0);
+
+    // The reservation is queryable and finalized.
+    const res = await app.inject({ method: "GET", url: `/api/matchmaking/reservations/${assignment.reservationId}` });
+    expect(res.statusCode).toBe(200);
+    const missing = await app.inject({ method: "GET", url: "/api/matchmaking/reservations/does-not-exist" });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it("matchmaking join is idempotent and leave is repeatable", async () => {
+    const first = await post("/api/matchmaking/join", { playerId: "mm-idem", displayName: "A", queue: "CASUAL_1V1", rating: 1400 });
+    const second = await post("/api/matchmaking/join", { playerId: "mm-idem", displayName: "A", queue: "CASUAL_1V1", rating: 1900 });
+    expect(second.entry.entryId).toBe(first.entry.entryId);
+    expect(second.entry.rating).toBe(1400);
+    const l1 = await post("/api/matchmaking/leave", { playerId: "mm-idem", queue: "CASUAL_1V1" });
+    const l2 = await post("/api/matchmaking/leave", { playerId: "mm-idem", queue: "CASUAL_1V1" });
+    expect(l1.removed).toBe(1);
+    expect(l2.removed).toBe(1);
   });
 
   it("settles a sandbox marketplace purchase", async () => {
