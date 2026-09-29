@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { GameCommand, MatchState } from "@ledgerlands/shared-types";
+import type { GameCommand, MatchState, MatchStatus } from "@ledgerlands/shared-types";
 import type { Difficulty } from "@ledgerlands/game-ai";
 
 /** A command persisted to the event log. Bot commands are persisted too, so replay is exact. */
@@ -9,6 +9,8 @@ export interface PersistedCommand {
   commandId: string;
   actorPlayerId: string;
   at: string;
+  /** Engine revision after applying the command (set by the store; used by PostgresBackend). */
+  resultRevision?: number;
 }
 
 export interface MatchSnapshot {
@@ -34,24 +36,26 @@ export interface StoredMatch {
   solo: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Denormalized lifecycle (kept in sync by the store; lets backends avoid replay on read). */
+  meta: { status: MatchStatus; stateRevision: number };
 }
 
 export interface StorageBackend {
-  save(matchId: string, record: StoredMatch): void;
-  load(matchId: string): StoredMatch | undefined;
-  list(): string[];
+  save(matchId: string, record: StoredMatch): Promise<void>;
+  load(matchId: string): Promise<StoredMatch | undefined>;
+  list(): Promise<string[]>;
 }
 
 export class MemoryBackend implements StorageBackend {
   private readonly data = new Map<string, StoredMatch>();
-  save(matchId: string, record: StoredMatch): void {
+  async save(matchId: string, record: StoredMatch): Promise<void> {
     this.data.set(matchId, structuredClone(record));
   }
-  load(matchId: string): StoredMatch | undefined {
+  async load(matchId: string): Promise<StoredMatch | undefined> {
     const r = this.data.get(matchId);
     return r ? structuredClone(r) : undefined;
   }
-  list(): string[] {
+  async list(): Promise<string[]> {
     return [...this.data.keys()];
   }
 }
@@ -67,17 +71,17 @@ export class FileBackend implements StorageBackend {
     if (!/^[A-Za-z0-9_-]+$/.test(matchId)) throw new Error("Invalid match id");
     return join(this.dir, `${matchId}.json`);
   }
-  save(matchId: string, record: StoredMatch): void {
+  async save(matchId: string, record: StoredMatch): Promise<void> {
     const tmp = `${this.path(matchId)}.tmp`;
     writeFileSync(tmp, JSON.stringify(record));
     renameSync(tmp, this.path(matchId));
   }
-  load(matchId: string): StoredMatch | undefined {
+  async load(matchId: string): Promise<StoredMatch | undefined> {
     const p = this.path(matchId);
     if (!existsSync(p)) return undefined;
     return JSON.parse(readFileSync(p, "utf8")) as StoredMatch;
   }
-  list(): string[] {
+  async list(): Promise<string[]> {
     if (!existsSync(this.dir)) return [];
     return readdirSync(this.dir)
       .filter((f) => f.endsWith(".json") && !f.endsWith(".tmp"))

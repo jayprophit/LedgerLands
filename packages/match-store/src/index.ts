@@ -18,6 +18,7 @@ import {
 } from "./storage.js";
 
 export * from "./storage.js";
+export * from "./postgres.js";
 
 export interface CreateParams {
   playerName: string;
@@ -65,7 +66,7 @@ export class PersistentMatchStore {
     return new PersistentMatchStore(new FileBackend(dataDir));
   }
 
-  create(params: CreateParams): { match: MatchState; playerId: string } {
+  async create(params: CreateParams): Promise<{ match: MatchState; playerId: string }> {
     const name = params.playerName.trim();
     if (!name) throw new GameRuleError("INVALID_NAME", "playerName is required.");
     if (name.length > 40) throw new GameRuleError("INVALID_NAME", "playerName too long.");
@@ -89,26 +90,28 @@ export class PersistentMatchStore {
       solo,
       createdAt: now,
       updatedAt: now,
+      meta: { status: "LOBBY", stateRevision: 0 },
     };
     let live = structuredClone(initial);
     if (solo) {
       live = this.applyAndPersist(matchId, stored, live, humanId, { type: "START_MATCH" }, `sys-start-${matchId}`);
     }
-    this.backend.save(matchId, stored);
+    this.syncMeta(stored, live);
+    await this.backend.save(matchId, stored);
     this.states.set(matchId, live);
     return { match: structuredClone(live), playerId: humanId };
   }
 
-  get(matchId: string): MatchState | undefined {
+  async get(matchId: string): Promise<MatchState | undefined> {
     const live = this.states.get(matchId);
     if (live) return structuredClone(live);
-    const rebuilt = this.rebuild(matchId);
+    const rebuilt = await this.rebuild(matchId);
     return rebuilt ? structuredClone(rebuilt) : undefined;
   }
 
-  join(matchId: string, playerName: string, startingBalance = 15000): { match: MatchState; playerId: string } {
-    const stored = this.requireStored(matchId);
-    const live = this.liveState(matchId, stored);
+  async join(matchId: string, playerName: string, startingBalance = 15000): Promise<{ match: MatchState; playerId: string }> {
+    const stored = await this.requireStored(matchId);
+    const live = await this.liveState(matchId, stored);
     if (live.status !== "LOBBY") throw new GameRuleError("MATCH_ALREADY_RUNNING", "Cannot join after the match has started.");
     if (live.players.length >= 4) throw new GameRuleError("MATCH_FULL", "Match already has four players.");
     if (live.players.some((p) => p.id.startsWith("bot-"))) throw new GameRuleError("SOLO_MATCH", "Cannot join a solo match.");
@@ -127,31 +130,33 @@ export class PersistentMatchStore {
     });
     // Join mutates the lobby roster (pre-start): persist by replacing initial.
     stored.initial = this.lobbySnapshot(live);
+    this.syncMeta(stored, live);
     this.touch(stored);
-    this.backend.save(matchId, stored);
+    await this.backend.save(matchId, stored);
     this.states.set(matchId, live);
     const player = live.players.at(-1)!;
     return { match: structuredClone(live), playerId: player.id };
   }
 
-  start(matchId: string): MatchState {
-    const stored = this.requireStored(matchId);
-    const live = this.liveState(matchId, stored);
+  async start(matchId: string): Promise<MatchState> {
+    const stored = await this.requireStored(matchId);
+    const live = await this.liveState(matchId, stored);
     if (live.status !== "LOBBY") throw new GameRuleError("MATCH_ALREADY_STARTED", "Match already started.");
     if (live.players.length < 2) throw new GameRuleError("NOT_ENOUGH_PLAYERS", "Need at least 2 players to start.");
     const next = this.applyAndPersist(matchId, stored, live, live.players[0]!.id, { type: "START_MATCH" }, `sys-start-${matchId}-${stored.commands.length}`);
-    this.backend.save(matchId, stored);
+    this.syncMeta(stored, next);
+    await this.backend.save(matchId, stored);
     this.states.set(matchId, next);
     return structuredClone(next);
   }
 
-  command(matchId: string, actorPlayerId: string, command: GameCommand, opts?: CommandOpts): MatchState {
-    const stored = this.requireStored(matchId);
+  async command(matchId: string, actorPlayerId: string, command: GameCommand, opts?: CommandOpts): Promise<MatchState> {
+    const stored = await this.requireStored(matchId);
     const commandId = opts?.commandId ?? randomUUID();
     if (stored.seenCommandIds.includes(commandId)) {
-      return structuredClone(this.liveState(matchId, stored));
+      return structuredClone(await this.liveState(matchId, stored));
     }
-    const live = this.liveState(matchId, stored);
+    const live = await this.liveState(matchId, stored);
     if (opts?.expectedRevision !== undefined && live.revision !== opts.expectedRevision) {
       throw new GameRuleError("STALE_STATE", `Expected revision ${opts.expectedRevision} but match is at ${live.revision}.`);
     }
@@ -159,24 +164,25 @@ export class PersistentMatchStore {
     if (actor !== actorPlayerId) throw new GameRuleError("ACTOR_MISMATCH", "Command player does not match authenticated actor.");
     let next = this.applyAndPersist(matchId, stored, live, actorPlayerId, command, commandId);
     next = this.runBotTurns(matchId, stored, next);
-    this.backend.save(matchId, stored);
+    this.syncMeta(stored, next);
+    await this.backend.save(matchId, stored);
     this.states.set(matchId, next);
     return structuredClone(next);
   }
 
   /** Events after a revision — for reconnect/event-sync. */
-  eventsSince(matchId: string, sinceRevision: number): MatchState["log"] {
-    const live = this.liveState(matchId, this.requireStored(matchId));
+  async eventsSince(matchId: string, sinceRevision: number): Promise<MatchState["log"]> {
+    const live = await this.liveState(matchId, await this.requireStored(matchId));
     return live.log.filter((e) => e.atRevision > sinceRevision);
   }
 
   /** Opaque resume token binding a client to a match revision. */
-  resumeToken(matchId: string): string {
-    const live = this.liveState(matchId, this.requireStored(matchId));
+  async resumeToken(matchId: string): Promise<string> {
+    const live = await this.liveState(matchId, await this.requireStored(matchId));
     return Buffer.from(`llr1.${matchId}.${live.revision}`, "utf8").toString("base64url");
   }
 
-  resume(token: string): { match: MatchState; currentRevision: number; stale: boolean } {
+  async resume(token: string): Promise<{ match: MatchState; currentRevision: number; stale: boolean }> {
     let decoded: string;
     try {
       decoded = Buffer.from(token, "base64url").toString("utf8");
@@ -186,32 +192,33 @@ export class PersistentMatchStore {
     const parts = decoded.split(".");
     if (parts.length !== 3 || parts[0] !== "llr1") throw new GameRuleError("INVALID_TOKEN", "Resume token is malformed.");
     const [, matchId, revStr] = parts as [string, string, string];
-    const live = this.liveState(matchId!, this.requireStored(matchId!));
+    const live = await this.liveState(matchId!, await this.requireStored(matchId!));
     const want = Number(revStr);
     return { match: structuredClone(live), currentRevision: live.revision, stale: live.revision !== want };
   }
 
   /** Cancel stale LOBBY matches. Returns cancelled ids. */
-  sweepLobbyTimeouts(nowMs: number, lobbyTimeoutMs: number): string[] {
+  async sweepLobbyTimeouts(nowMs: number, lobbyTimeoutMs: number): Promise<string[]> {
     const cancelled: string[] = [];
-    for (const matchId of this.backend.list()) {
-      const stored = this.backend.load(matchId);
+    for (const matchId of await this.backend.list()) {
+      const stored = await this.backend.load(matchId);
       if (!stored) continue;
-      const live = this.liveState(matchId, stored);
+      const live = await this.liveState(matchId, stored);
       if (live.status !== "LOBBY") continue;
       if (nowMs - Date.parse(stored.createdAt) < lobbyTimeoutMs) continue;
       stored.corrections.push({ kind: "CANCEL_LOBBY_TIMEOUT", at: new Date(nowMs).toISOString(), detail: `lobby idle > ${lobbyTimeoutMs}ms` });
+      stored.meta = { status: "CANCELLED", stateRevision: live.revision };
       this.touch(stored);
-      this.backend.save(matchId, stored);
+      await this.backend.save(matchId, stored);
       this.states.delete(matchId);
       cancelled.push(matchId);
     }
     return cancelled;
   }
 
-  exportReplay(matchId: string): ReplayExport {
-    const stored = this.requireStored(matchId);
-    const live = this.liveState(matchId, stored);
+  async exportReplay(matchId: string): Promise<ReplayExport> {
+    const stored = await this.requireStored(matchId);
+    const live = await this.liveState(matchId, stored);
     if (live.status === "LOBBY") throw new GameRuleError("MATCH_NOT_STARTED", "Match has not started.");
     const balances: Record<string, number> = {};
     for (const p of live.players) balances[p.name] = p.balance;
@@ -233,29 +240,32 @@ export class PersistentMatchStore {
     return export_;
   }
 
-  list(): MatchState[] {
-    return this.backend.list().map((id) => structuredClone(this.liveState(id, this.requireStored(id))));
+  async list(): Promise<MatchState[]> {
+    const ids = await this.backend.list();
+    const out: MatchState[] = [];
+    for (const id of ids) out.push(structuredClone(await this.liveState(id, await this.requireStored(id))));
+    return out;
   }
 
   // ---- internals ----
 
-  private requireStored(matchId: string): StoredMatch {
-    const stored = this.backend.load(matchId);
+  private async requireStored(matchId: string): Promise<StoredMatch> {
+    const stored = await this.backend.load(matchId);
     if (!stored) throw new GameRuleError("MATCH_NOT_FOUND", `Match ${matchId} was not found.`);
     return stored;
   }
 
-  private liveState(matchId: string, stored: StoredMatch): MatchState {
+  private async liveState(matchId: string, stored: StoredMatch): Promise<MatchState> {
     const cached = this.states.get(matchId);
     if (cached && !stored.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT")) return cached;
-    const rebuilt = this.rebuild(matchId);
+    const rebuilt = await this.rebuild(matchId);
     if (!rebuilt) throw new GameRuleError("MATCH_NOT_FOUND", `Match ${matchId} was not found.`);
     return rebuilt;
   }
 
   /** Deterministic rebuild: initial + persisted commands, then corrections. */
-  rebuild(matchId: string): MatchState | undefined {
-    const stored = this.backend.load(matchId);
+  async rebuild(matchId: string): Promise<MatchState | undefined> {
+    const stored = await this.backend.load(matchId);
     if (!stored) return undefined;
     let state = replayCommands(structuredClone(stored.initial), stored.commands.map((c) => c.command));
     if (stored.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT")) {
@@ -274,7 +284,7 @@ export class PersistentMatchStore {
     commandId: string,
   ): MatchState {
     const next = applyCommand(live, command);
-    stored.commands.push({ command, commandId, actorPlayerId, at: new Date().toISOString() });
+    stored.commands.push({ command, commandId, actorPlayerId, at: new Date().toISOString(), resultRevision: next.revision });
     stored.seenCommandIds.push(commandId);
     if (stored.commands.length % SNAPSHOT_EVERY_COMMANDS === 0) {
       stored.snapshots.push({ revision: next.revision, state: structuredClone(next), at: new Date().toISOString() });
@@ -326,6 +336,11 @@ export class PersistentMatchStore {
 
   private touch(stored: StoredMatch): void {
     stored.updatedAt = new Date().toISOString();
+  }
+
+  private syncMeta(stored: StoredMatch, live: MatchState): void {
+    const cancelled = stored.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT");
+    stored.meta = { status: cancelled ? "CANCELLED" : live.status, stateRevision: live.revision };
   }
 }
 

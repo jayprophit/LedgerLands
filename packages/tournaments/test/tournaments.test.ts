@@ -55,7 +55,7 @@ describe("tournaments", () => {
     expect(() => svc.start(id)).toThrow();
   });
 
-  it("requires power-of-two entries and refunds on cancel", () => {
+  it("supports odd entry counts via byes and refunds on cancel", () => {
     const svc = new TournamentService(new DoubleEntryLedger());
     const ledger = (svc as unknown as { ledger: DoubleEntryLedger }).ledger;
     for (const u of ["a", "b", "c"]) {
@@ -73,9 +73,21 @@ describe("tournaments", () => {
     svc.register(t.id, "a");
     svc.register(t.id, "b");
     svc.register(t.id, "c");
-    expect(() => svc.lock(t.id)).toThrow(/2, 4 or 8/);
+    // Non-power-of-two is allowed: one round-1 match plus one bye.
+    const locked = svc.lock(t.id);
+    const round1 = locked.bracket.filter((m) => m.round === 1);
+    expect(round1).toHaveLength(2);
+    expect(round1.filter((m) => m.bye)).toHaveLength(1);
     const cancelled = svc.cancel(t.id);
     expect(cancelled.status).toBe("REFUNDED");
     expect(ledger.balanceOf("PLAYER_AVAILABLE", "a")).toBe(500);
+  });
+
+  it("rejects locking with fewer than two entries", () => {
+    const svc = new TournamentService(new DoubleEntryLedger());
+    const t = svc.create({ name: "Solo Cup" });
+    svc.openRegistration(t.id);
+    svc.register(t.id, "only");
+    expect(() => svc.lock(t.id)).toThrow(/NOT_ENOUGH_PLAYERS/);
   });
 });

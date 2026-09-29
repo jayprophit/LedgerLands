@@ -101,8 +101,7 @@ describe("API integration", () => {
     expect(board[0].rank).toBe(1);
   });
 
-  it("runs a tournament lifecycle to completion", async () => {
-    const created = await post("/api/tournaments", { name: "Integ Cup", entryFee: 0, maxPlayers: 2 }, 201);
+  it("runs a tournament lifecycle to completion", async () => {    const created = await post("/api/tournaments", { name: "Integ Cup", entryFee: 0, maxPlayers: 2 }, 201);
     const id = created.tournament.id;
     await post(`/api/tournaments/${id}/open`, {});
     await post(`/api/tournaments/${id}/register`, { userId: "p1" });
@@ -114,5 +113,46 @@ describe("API integration", () => {
     const done = await post(`/api/tournaments/${id}/results`, { bracketMatchId: final.id, winnerId: "p1" });
     expect(done.tournament.status).toBe("COMPLETED");
     expect(done.tournament.championId).toBe("p1");
+  });
+
+  it("issues dev sessions and verifies identity", async () => {
+    const login = await post("/api/auth/dev/login", { displayName: "Dev Tester" });
+    expect(login.token.startsWith("lld1.")).toBe(true);
+    expect(login.principal.provider).toBe("dev");
+    expect(login.warning).toMatch(/DEV-ONLY/);
+    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { authorization: `Bearer ${login.token}` } });
+    expect(me.statusCode).toBe(200);
+    expect((me.json() as any).principal.playerId).toBe(login.principal.playerId);
+    const anon = await app.inject({ method: "GET", url: "/api/auth/me" });
+    expect(anon.statusCode).toBe(401);
+  });
+
+  it("matchmakes two players into an authoritative match", async () => {
+    await post("/api/matchmaking/join", { playerId: "mm-a", displayName: "A", queue: "CASUAL_1V1" });
+    await post("/api/matchmaking/join", { playerId: "mm-b", displayName: "B", queue: "CASUAL_1V1" });
+    const tick = await post("/api/matchmaking/tick", {});
+    expect(tick.found).toHaveLength(1);
+    const claimed = await post("/api/matchmaking/claim", { reservationId: tick.found[0].reservationId });
+    expect(claimed.match.status).toBe("ACTIVE");
+    expect(claimed.match.players).toHaveLength(2);
+    expect(claimed.playerIds).toHaveLength(2);
+  });
+
+  it("settles a sandbox marketplace purchase", async () => {
+    await post("/api/marketplace/faucet", { accountId: "shopper", amount: 2000 });
+    await post("/api/marketplace/mint", { kind: "cosmetic", assetId: "neon-dice", ownerId: "vendor" });
+    const listed = await post(
+      "/api/marketplace/list",
+      { sellerId: "vendor", kind: "cosmetic", assetId: "neon-dice", price: 1000 },
+      201,
+    );
+    const bought = await post("/api/marketplace/buy", {
+      buyerId: "shopper",
+      listingId: listed.listing.id,
+      idempotencyKey: "integ-buy-1",
+    });
+    expect(bought.listing.status).toBe("SOLD");
+    const listings = (await app.inject({ method: "GET", url: "/api/marketplace/listings" }).then((r) => r.json())) as any;
+    expect(listings.listings).toHaveLength(0);
   });
 });

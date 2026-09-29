@@ -13,10 +13,13 @@
   },
   "dependencies": {
     "@ledgerlands/aetherius-sdk": "0.1.0",
+    "@ledgerlands/auth": "0.1.0",
     "@ledgerlands/game-ai": "0.1.0",
     "@ledgerlands/game-engine": "0.1.0",
     "@ledgerlands/ledger": "0.1.0",
+    "@ledgerlands/marketplace": "0.1.0",
     "@ledgerlands/match-store": "0.1.0",
+    "@ledgerlands/matchmaking": "0.1.0",
     "@ledgerlands/ranked": "0.1.0",
     "@ledgerlands/shared-types": "0.1.0",
     "@ledgerlands/tournaments": "0.1.0",

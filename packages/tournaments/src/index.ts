@@ -21,6 +21,10 @@ export interface BracketMatch {
   seedB?: string | undefined;
   winnerId?: string;
   matchId?: string;
+  /** True when decided by first-round bye (no game played). */
+  bye?: boolean;
+  /** Id of the round-(round+1) match this match feeds. Makes advancement explicit. */
+  targetMatchId?: string;
 }
 
 export interface Tournament {
@@ -41,7 +45,7 @@ export interface Tournament {
 export class TournamentError extends Error {
   readonly code: string;
   constructor(code: string, message: string) {
-    super(message);
+    super(`[${code}] ${message}`);
     this.name = "TournamentError";
     this.code = code;
   }
@@ -112,9 +116,6 @@ export class TournamentService {
     const t = this.require(id);
     if (t.status !== "REGISTRATION") throw new TournamentError("BAD_TRANSITION", "Lock requires REGISTRATION.");
     if (t.entries.length < 2) throw new TournamentError("NOT_ENOUGH_PLAYERS", "Need at least 2 entries.");
-    if (!isPowerOfTwo(t.entries.length)) {
-      throw new TournamentError("NEEDS_POWER_OF_TWO", "MVP brackets need 2, 4 or 8 entries (byes are a follow-up).");
-    }
     t.bracket = buildSingleElim(t.entries);
     t.status = "LOCKED";
     this.touch(t);
@@ -131,21 +132,29 @@ export class TournamentService {
     if (t.status !== "ACTIVE") throw new TournamentError("NOT_ACTIVE", "Tournament is not active.");
     const m = t.bracket.find((b) => b.id === bracketMatchId);
     if (!m) throw new TournamentError("MATCH_NOT_FOUND", "Bracket match not found.");
+    if (m.bye) throw new TournamentError("BYE_MATCH", "Bye matches are decided at lock; nothing to report.");
     if (m.winnerId) throw new TournamentError("ALREADY_REPORTED", "Result already recorded.");
     if (m.seedA !== winnerId && m.seedB !== winnerId) throw new TournamentError("NOT_PARTICIPANT", "Winner is not in this bracket match.");
     m.winnerId = winnerId;
-    // Advance into next round slot.
-    const next = t.bracket.find((b) => b.round === m.round + 1 && (b.seedA === undefined || b.seedB === undefined));
-    if (next) {
-      if (next.seedA === undefined) next.seedA = winnerId;
-      else next.seedB = winnerId;
-    } else if (m.round === maxRound(t.bracket)) {
+    this.advance(t, m, winnerId);
+    this.touch(t);
+    return this.copy(t);
+  }
+
+  /** Explicit, replayable advancement: winner flows into the linked next-round match. */
+  private advance(t: Tournament, m: BracketMatch, winnerId: string): void {
+    if (!m.targetMatchId) {
+      // Winner of the final match is the champion.
       t.championId = winnerId;
       t.status = "SETTLING";
       this.settle(t);
+      return;
     }
-    this.touch(t);
-    return this.copy(t);
+    const next = t.bracket.find((b) => b.id === m.targetMatchId);
+    if (!next) throw new TournamentError("MATCH_NOT_FOUND", "Target bracket match not found.");
+    if (next.seedA === undefined) next.seedA = winnerId;
+    else if (next.seedB === undefined) next.seedB = winnerId;
+    else throw new TournamentError("SLOT_TAKEN", "Next-round slot already filled.");
   }
 
   cancel(id: string): Tournament {
@@ -240,21 +249,67 @@ function runnerUpOf(t: Tournament): string | undefined {
   return final.seedA === final.winnerId ? final.seedB : final.seedA;
 }
 
-function isPowerOfTwo(n: number): boolean {
-  return n >= 2 && (n & (n - 1)) === 0;
+function nextPowerOfTwo(n: number): number {
+  let p = 2;
+  while (p < n) p *= 2;
+  return p;
 }
 
+/**
+ * Single elimination with deterministic byes.
+ *
+ * Registration order is the seed order; the draw fills sequentially, so byes
+ * fall to the END of registration (late registrants meet an empty slot). Round-1
+ * byes are pre-decided at lock and flagged `bye` so audits never see them as
+ * played matches. Every other match is decided by a reported result, and each
+ * match links to its `targetMatchId` so advancement is explicit and replayable.
+ */
 function buildSingleElim(entries: string[]): BracketMatch[] {
-  const rounds = Math.log2(entries.length);
+  const size = nextPowerOfTwo(entries.length);
+  const rounds = Math.log2(size);
+  const slots = size / 2; // matches in round 1
+  // Playable round-1 matches, then one bye per remaining player. Every match
+  // gets at least one real registrant, so no phantom/empty match ever exists.
+  const fullMatches = Math.max(0, entries.length - slots);
+  const byeCount = slots - fullMatches;
   const bracket: BracketMatch[] = [];
-  let roundSeeds: Array<string | undefined> = [...entries];
-  for (let r = 1; r <= rounds; r += 1) {
-    const next: Array<string | undefined> = [];
-    for (let i = 0; i < roundSeeds.length; i += 2) {
-      bracket.push({ id: randomUUID(), round: r, seedA: roundSeeds[i], seedB: roundSeeds[i + 1] });
-      next.push(undefined);
+
+  // Round 1.
+  const round1: BracketMatch[] = [];
+  let i = 0;
+  for (let f = 0; f < fullMatches; f += 1) {
+    round1.push({ id: randomUUID(), round: 1, seedA: entries[i++], seedB: entries[i++] });
+  }
+  for (let b = 0; b < byeCount; b += 1) {
+    const p = entries[i++]!;
+    round1.push({ id: randomUUID(), round: 1, seedA: p, bye: true, winnerId: p });
+  }
+
+  // Later rounds: create shells and link each match to the one it feeds.
+  const roundsOf: BracketMatch[][] = [round1];
+  let current = round1;
+  for (let r = 2; r <= rounds; r += 1) {
+    const next: BracketMatch[] = [];
+    for (let i = 0; i < current.length; i += 2) {
+      next.push({ id: randomUUID(), round: r });
     }
-    roundSeeds = next;
+    for (let i = 0; i < current.length; i += 1) {
+      const target = next[Math.floor(i / 2)];
+      if (target) current[i]!.targetMatchId = target.id;
+    }
+    roundsOf.push(next);
+    current = next;
+  }
+
+  for (const r of roundsOf) bracket.push(...r);
+
+  // Advance pre-decided byes into their target round.
+  for (const m of round1) {
+    if (!m.bye || !m.winnerId || !m.targetMatchId) continue;
+    const target = bracket.find((b) => b.id === m.targetMatchId);
+    if (!target) continue;
+    if (target.seedA === undefined) target.seedA = m.winnerId;
+    else if (target.seedB === undefined) target.seedB = m.winnerId;
   }
   return bracket;
 }

@@ -34,6 +34,7 @@ export type LedgerEntryType =
   | "login_reward"
   | "refund"
   | "tournament"
+  | "marketplace"
   | "withdrawal"
   | "fee"
   | "adjustment";

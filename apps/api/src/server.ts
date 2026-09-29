@@ -2,7 +2,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { GameCommand } from "@ledgerlands/shared-types";
 import { BOARD_VERSION, DEFAULT_BOARD, GameRuleError, RULESET_VERSION } from "@ledgerlands/game-engine";
-import { FileBackend, MemoryBackend, PersistentMatchStore } from "@ledgerlands/match-store";
+import { ConcurrencyError, MemoryBackend, PersistentMatchStore, type StorageBackend } from "@ledgerlands/match-store";
+import { DevAuthAdapter, type AuthPrincipal } from "@ledgerlands/auth";
+import { MarketplaceService, MarketplaceError, type MarketplaceAssetKind } from "@ledgerlands/marketplace";
+import { DoubleEntryLedger } from "@ledgerlands/ledger";
+import { MatchmakingError, MatchmakingService, type QueueName } from "@ledgerlands/matchmaking";
 import { blankRating, leaderboard, settleHeadToHead, type PlayerRating } from "@ledgerlands/ranked";
 import { TournamentError, TournamentService } from "@ledgerlands/tournaments";
 import { PracticeLedger } from "./ledger.js";
@@ -16,13 +20,19 @@ export interface BuiltApp {
   attachSockets: () => void;
 }
 
-export function buildApp(): BuiltApp {
+export function buildApp(opts?: { backend?: StorageBackend; persistence?: string }): BuiltApp {
   const app = Fastify({ logger: false });
-  const dataDir = process.env.LEDGERLANDS_DATA_DIR;
-  const store = new PersistentMatchStore(dataDir ? new FileBackend(dataDir) : new MemoryBackend());
+  const persistence = opts?.persistence ?? (opts?.backend ? "custom" : "memory");
+  const store = new PersistentMatchStore(opts?.backend ?? new MemoryBackend());
   const ledger = new PracticeLedger();
   const tournaments = new TournamentService();
   const ratings = new Map<string, PlayerRating>();
+  const auth = new DevAuthAdapter(
+    process.env.LEDGERLANDS_DEV_SECRET ? { secret: process.env.LEDGERLANDS_DEV_SECRET } : undefined,
+  );
+  const matchmaking = new MatchmakingService();
+  const marketLedger = new DoubleEntryLedger();
+  const marketplace = new MarketplaceService(marketLedger);
   const subscriptions = new Map<string, Set<WebSocket>>();
 
   function broadcast(matchId: string, match: unknown): void {
@@ -48,7 +58,7 @@ export function buildApp(): BuiltApp {
     version: "0.1.0",
     boardVersion: BOARD_VERSION,
     rulesetVersion: RULESET_VERSION,
-    persistence: dataDir ? "file" : "memory",
+    persistence,
     realValueFeaturesEnabled: false,
   });
   app.get("/health", health);
@@ -57,14 +67,14 @@ export function buildApp(): BuiltApp {
   const board = async () => ({ tiles: DEFAULT_BOARD, boardVersion: BOARD_VERSION, rulesetVersion: RULESET_VERSION });
   app.get("/api/board", board);
   app.get("/api/v1/board", board);
-  app.get("/api/matches", async () => ({ matches: store.list() }));
-  app.get("/api/v1/matches", async () => ({ matches: store.list() }));
+  app.get("/api/matches", async () => ({ matches: await store.list() }));
+  app.get("/api/v1/matches", async () => ({ matches: await store.list() }));
 
   app.post<{
     Body: { playerName?: string; startingBalance?: number; seed?: number; solo?: boolean; difficulty?: string };
   }>("/api/matches", async (request, reply) => {
     try {
-      const { match, playerId } = store.create({
+      const { match, playerId } = await store.create({
         playerName: request.body?.playerName ?? "",
         ...(request.body?.startingBalance !== undefined ? { startingBalance: request.body.startingBalance } : {}),
         ...(request.body?.seed !== undefined ? { seed: request.body.seed } : {}),
@@ -78,7 +88,7 @@ export function buildApp(): BuiltApp {
   });
 
   app.get<{ Params: { id: string } }>("/api/matches/:id", async (request, reply) => {
-    const match = store.get(request.params.id);
+    const match = await store.get(request.params.id);
     if (!match) return reply.code(404).send({ error: "match not found" });
     return { match };
   });
@@ -87,7 +97,7 @@ export function buildApp(): BuiltApp {
     "/api/matches/:id/join",
     async (request, reply) => {
       try {
-        const { match, playerId } = store.join(request.params.id, request.body?.playerName ?? "", request.body?.startingBalance ?? 15000);
+        const { match, playerId } = await store.join(request.params.id, request.body?.playerName ?? "", request.body?.startingBalance ?? 15000);
         broadcast(request.params.id, match);
         return reply.code(201).send({ match, playerId });
       } catch (error) {
@@ -98,7 +108,7 @@ export function buildApp(): BuiltApp {
 
   app.post<{ Params: { id: string } }>("/api/matches/:id/start", async (request, reply) => {
     try {
-      const match = store.start(request.params.id);
+      const match = await store.start(request.params.id);
       broadcast(request.params.id, match);
       return { match };
     } catch (error) {
@@ -114,7 +124,7 @@ export function buildApp(): BuiltApp {
     const command = request.body?.command;
     if (!playerId || !command) return reply.code(400).send({ error: "playerId and command are required" });
     try {
-      const match = store.command(request.params.id, playerId, command, {
+      const match = await store.command(request.params.id, playerId, command, {
         ...(request.body.commandId ? { commandId: request.body.commandId } : {}),
         ...(request.body.expectedRevision !== undefined ? { expectedRevision: request.body.expectedRevision } : {}),
       });
@@ -130,7 +140,7 @@ export function buildApp(): BuiltApp {
     async (request, reply) => {
       try {
         const since = Number(request.query?.since ?? 0);
-        return { matchId: request.params.id, events: store.eventsSince(request.params.id, since) };
+        return { matchId: request.params.id, events: await store.eventsSince(request.params.id, since) };
       } catch (error) {
         return ruleError(reply, error);
       }
@@ -139,7 +149,7 @@ export function buildApp(): BuiltApp {
 
   app.get<{ Params: { id: string } }>("/api/matches/:id/replay", async (request, reply) => {
     try {
-      return store.exportReplay(request.params.id);
+      return await store.exportReplay(request.params.id);
     } catch (error) {
       return ruleError(reply, error);
     }
@@ -149,8 +159,8 @@ export function buildApp(): BuiltApp {
     "/api/matches/:id/resume",
     async (request, reply) => {
       try {
-        if (request.query?.token) return store.resume(request.query.token);
-        return { resumeToken: store.resumeToken(request.params.id), match: store.get(request.params.id) };
+        if (request.query?.token) return await store.resume(request.query.token);
+        return { resumeToken: await store.resumeToken(request.params.id), match: await store.get(request.params.id) };
       } catch (error) {
         return ruleError(reply, error);
       }
@@ -253,13 +263,143 @@ export function buildApp(): BuiltApp {
     history: ledger.history(request.params.accountId),
   }));
 
+  // ---- Dev auth (NOT production auth; see packages/auth) ----
+  app.post<{ Body: { displayName?: string } }>("/api/auth/dev/login", async (request, reply) => {
+    try {
+      const { principal, token } = auth.loginDev(request.body?.displayName ?? "");
+      return { principal, token, warning: "DEV-ONLY session: no MFA, no KYC, never valid for real value." };
+    } catch (error) {
+      return reply.code(400).send({ error: "invalid_name", message: (error as Error).message });
+    }
+  });
+
+  app.get("/api/auth/me", async (request, reply) => {
+    const principal = bearer(request.headers.authorization, auth);
+    if (!principal) return reply.code(401).send({ error: "unauthorized" });
+    return { principal };
+  });
+
+  // ---- Matchmaking (queues form reservations; claim creates the authoritative match) ----
+  app.post<{ Body: { playerId?: string; displayName?: string; queue?: QueueName; rating?: number } }>(
+    "/api/matchmaking/join",
+    async (request, reply) => {
+      try {
+        if (!request.body?.playerId || !request.body?.displayName || !request.body?.queue) {
+          return reply.code(400).send({ error: "playerId, displayName and queue are required" });
+        }
+        const { entry, position } = matchmaking.join({
+          playerId: request.body.playerId,
+          displayName: request.body.displayName,
+          queue: request.body.queue,
+          rating: request.body.rating ?? 1500,
+        });
+        return { entry, position };
+      } catch (error) {
+        return ruleError(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Body: { playerId?: string; queue?: QueueName } }>("/api/matchmaking/leave", async (request) => ({
+    removed: matchmaking.leave(request.body?.playerId ?? "", request.body?.queue),
+  }));
+
+  app.post("/api/matchmaking/tick", async () => ({ found: matchmaking.tick(Date.now()) }));
+
+  app.post<{ Body: { reservationId?: string } }>("/api/matchmaking/claim", async (request, reply) => {
+    try {
+      if (!request.body?.reservationId) return reply.code(400).send({ error: "reservationId is required" });
+      const reservation = matchmaking.claim(request.body.reservationId);
+      // Create one authoritative multiplayer match for the reserved group.
+      const first = reservation.playerIds[0]!;
+      const created = await store.create({ playerName: first, solo: false });
+      const createdIds = [created.playerId];
+      for (const pid of reservation.playerIds.slice(1)) {
+        const joined = await store.join(created.match.id, pid);
+        createdIds.push(joined.playerId);
+      }
+      const match = await store.start(created.match.id);
+      return { reservation, match, playerIds: createdIds };
+    } catch (error) {
+      return ruleError(reply, error);
+    }
+  });
+
+  // ---- Marketplace sandbox (simulated sats only) ----
+  app.post<{ Body: { kind?: MarketplaceAssetKind; assetId?: string; ownerId?: string } }>(
+    "/api/marketplace/mint",
+    async (request, reply) => {
+      try {
+        if (!request.body?.kind || !request.body?.assetId || !request.body?.ownerId) {
+          return reply.code(400).send({ error: "kind, assetId and ownerId are required" });
+        }
+        marketplace.registerAsset(request.body.kind, request.body.assetId, request.body.ownerId);
+        return { ok: true };
+      } catch (error) {
+        return ruleError(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Body: { accountId?: string; amount?: number } }>(
+    "/api/marketplace/faucet",
+    async (request, reply) => {
+      const { accountId, amount = 5000 } = request.body ?? {};
+      if (!accountId) return reply.code(400).send({ error: "accountId is required" });
+      if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 100000) {
+        return reply.code(400).send({ error: "amount must be an integer from 1 to 100000" });
+      }
+      marketLedger.post({
+        playerId: accountId,
+        amount,
+        debitAccount: "MATCH_BANK",
+        creditAccount: "PLAYER_AVAILABLE",
+        type: "deposit",
+        idempotencyKey: `mkt-faucet-${accountId}-${amount}-${Date.now()}`,
+      });
+      return { accountId, balance: marketLedger.balanceOf("PLAYER_AVAILABLE", accountId) };
+    },
+  );
+
+  app.post<{ Body: { sellerId?: string; kind?: MarketplaceAssetKind; assetId?: string; price?: number } }>(
+    "/api/marketplace/list",
+    async (request, reply) => {
+      try {
+        if (!request.body?.sellerId || !request.body?.kind || !request.body?.assetId || request.body?.price === undefined) {
+          return reply.code(400).send({ error: "sellerId, kind, assetId and price are required" });
+        }
+        const listing = marketplace.list(request.body.sellerId, request.body.kind, request.body.assetId, request.body.price);
+        return reply.code(201).send({ listing });
+      } catch (error) {
+        return ruleError(reply, error);
+      }
+    },
+  );
+
+  app.post<{ Body: { buyerId?: string; listingId?: string; idempotencyKey?: string } }>(
+    "/api/marketplace/buy",
+    async (request, reply) => {
+      try {
+        if (!request.body?.buyerId || !request.body?.listingId || !request.body?.idempotencyKey) {
+          return reply.code(400).send({ error: "buyerId, listingId and idempotencyKey are required" });
+        }
+        const listing = marketplace.buy(request.body.buyerId, request.body.listingId, request.body.idempotencyKey);
+        return { listing };
+      } catch (error) {
+        return ruleError(reply, error);
+      }
+    },
+  );
+
+  app.get("/api/marketplace/listings", async () => ({ listings: marketplace.listOpen() }));
+
   function attachSockets(): void {
     const wss = new WebSocketServer({ server: app.server, path: "/ws" });
     wss.on("connection", (socket) => {
       const heartbeat = setInterval(() => {
         if (socket.readyState === socket.OPEN) socket.ping();
       }, 30000);
-      socket.on("message", (raw) => {
+      socket.on("message", async (raw) => {
         try {
           const message = JSON.parse(raw.toString()) as { type?: string; matchId?: string };
           if (message.type !== "subscribe" || !message.matchId) return;
@@ -269,7 +409,7 @@ export function buildApp(): BuiltApp {
             subscriptions.set(message.matchId, set);
           }
           set.add(socket);
-          const match = store.get(message.matchId);
+          const match = await store.get(message.matchId);
           if (match) socket.send(JSON.stringify({ type: "match_state", match }));
           socket.once("close", () => {
             set?.delete(socket);
@@ -286,14 +426,28 @@ export function buildApp(): BuiltApp {
   return { app, store, tournaments, ratings, broadcast, attachSockets };
 }
 
+function bearer(header: string | undefined, auth: DevAuthAdapter): AuthPrincipal | null {
+  if (!header?.startsWith("Bearer ")) return null;
+  return auth.verifyToken(header.slice("Bearer ".length));
+}
+
 function ruleError(reply: any, error: unknown) {
   if (error instanceof GameRuleError) {
     const status = error.code === "STALE_STATE" ? 412 : error.code === "MATCH_NOT_FOUND" ? 404 : 409;
     return reply.code(status).send({ error: error.code, message: error.message });
   }
+  if (error instanceof MatchmakingError) {
+    return reply.code(409).send({ error: error.code, message: error.message });
+  }
+  if (error instanceof MarketplaceError) {
+    return reply.code(409).send({ error: error.code, message: error.message });
+  }
   if (error instanceof TournamentError) {
     const status = error.code === "NOT_FOUND" ? 404 : 409;
     return reply.code(status).send({ error: error.code, message: error.message });
+  }
+  if (error instanceof ConcurrencyError) {
+    return reply.code(409).send({ error: error.code, message: `${error.message} Reload and retry.` });
   }
   // eslint-disable-next-line no-console
   console.error(error);
@@ -302,7 +456,9 @@ function ruleError(reply: any, error: unknown) {
 
 // Only listen when executed directly (tests import buildApp with LL_NO_LISTEN=1).
 if (process.env.LL_NO_LISTEN !== "1") {
-  const { app, attachSockets } = buildApp();
+  const { resolveMatchBackend } = await import("./prisma.js");
+  const { backend, persistence } = await resolveMatchBackend();
+  const { app, attachSockets } = buildApp({ backend, persistence });
   attachSockets();
   const port = Number(process.env.API_PORT ?? 8787);
   await app.listen({ host: "0.0.0.0", port });
