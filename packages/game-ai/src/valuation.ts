@@ -267,11 +267,64 @@ export function valuePropertyFor(
  * A tile's value is a fact about the board, not about who is looking at it. If
  * value were computed per-difficulty then a BEGINNER would literally perceive a
  * different board from an EXPERT, which makes "did this bot make a good trade?"
- * unanswerable and makes the tolerance table incoherent. So value is always
- * computed at a reference difficulty, and difficulty changes only the
+ * unanswerable and makes the tolerance table incoherent. So property value is
+ * always computed at a reference difficulty, and difficulty changes only the
  * *thresholds* a bot applies to that value.
+ *
+ * CASH is the deliberate exception, because cash genuinely is worth different
+ * amounts to different players — see `cashValueFor`.
  */
 export const REFERENCE_DIFFICULTY = "NORMAL";
+
+/**
+ * Board wealth scale: the total purchase price of everything on the board.
+ *
+ * This is the denominator for "how rich am I" in cash valuation. An earlier
+ * version used the largest single rent instead, which saturates instantly — a
+ * player with 16,000 against a 20-sats rent scored cash at 5% of face, so no
+ * price could ever satisfy both sides and bots never traded at all. A discount
+ * calibrated to the whole board produces the modest 10-20% spread that cash
+ * actually has, which is what leaves room for a price.
+ */
+let boardWealth: number | null = null;
+function totalBoardWealth(): number {
+  if (boardWealth === null) {
+    let sum = 0;
+    for (const t of DEFAULT_BOARD) {
+      if (t.economics) sum += t.economics.purchasePrice;
+    }
+    boardWealth = sum > 0 ? sum : 60_000;
+  }
+  return boardWealth;
+}
+
+/**
+ * Marginal value of cash to a specific player.
+ *
+ * Cash is worth slightly LESS to a bot already sitting on a lot of it: it would
+ * rather own land that earns rent. The discount is small by design, because
+ * in practice cash is close to face value and a large discount makes trading
+ * impossible rather than merely rare.
+ *
+ * This asymmetry is what lets two rational bots agree a price. The rich one
+ * accepts less cash for a tile, the poor one pays more, and the band between
+ * their two valuations is the trade.
+ */
+export function cashValueFor(
+  state: MatchState,
+  playerId: PlayerId,
+  sats: number,
+  difficulty: string,
+): number {
+  if (sats <= 0) return 0;
+  const w = weightsFor(difficulty);
+  const balance = state.players.find((p) => p.id === playerId)?.balance ?? 0;
+  const share = balance / totalBoardWealth();
+  const cushion = 1 / (1 + w.liquidity * share);
+  // Floored at 0.5: cash is never worth less than half its face value, because
+  // it is the only thing that settles a rent.
+  return sats * Math.max(0.5, Math.min(1, cushion));
+}
 
 /** Value of a set of tiles to a holder, as the sum of their individual values. */
 export function valueTilesFor(
@@ -329,6 +382,8 @@ export function evaluateTrade(
   const proposerCash = proposer?.balance ?? 0;
   const counterpartyCash = counterparty?.balance ?? 0;
   const w = weightsFor(difficulty);
+  void counterpartyCash;
+  void w;
 
   // Board value is computed at the REFERENCE difficulty, not the caller's, so
   // both sides of a trade are scored against the same facts. `difficulty` is
@@ -344,11 +399,26 @@ export function evaluateTrade(
   const propertyOutForCounterparty = valueTilesFor(state, requestProps, counterpartyId, REFERENCE_DIFFICULTY);
   const propertyInForCounterparty = valueTilesFor(state, offerProps, counterpartyId, REFERENCE_DIFFICULTY);
 
-  const cashOut = offerSats + counterpartyCash * w.liquidity;
-  const cashIn = requestSats + proposerCash * w.liquidity;
+  const cashOutRaw = offerSats;
+  const cashInRaw = requestSats;
 
-  const valueToProposer = propertyIn + requestSats - propertyOut - offerSats;
-  const valueToCounterparty = propertyInForCounterparty + offerSats - propertyOutForCounterparty - requestSats;
+  // Cash is valued marginally and per player, so a solvent bot and a struggling
+  // one can legitimately disagree about a price.
+  //
+  // The reference difficulty is used here for the same reason the property path
+  // uses it: the VALUE of a thing must be a fact about the board, not about who
+  // is asking. `difficulty` still decides the tolerance a value is measured
+  // against (see the margin below), so a beginner accepts what an expert refuses
+  // — but both are scoring the same number. Passing the caller's difficulty in
+  // here made a tile and a sat differently-valued depending on who looked, which
+  // is what "was that a good trade?" cannot survive.
+  const cashIn = cashValueFor(state, proposerId, cashInRaw, REFERENCE_DIFFICULTY);
+  const cashOut = cashValueFor(state, proposerId, cashOutRaw, REFERENCE_DIFFICULTY);
+  const cashInForCounterparty = cashValueFor(state, counterpartyId, cashInRaw, REFERENCE_DIFFICULTY);
+  const cashOutForCounterparty = cashValueFor(state, counterpartyId, cashOutRaw, REFERENCE_DIFFICULTY);
+
+  const valueToProposer = propertyIn + cashIn - propertyOut - cashOut;
+  const valueToCounterparty = propertyInForCounterparty + cashOutForCounterparty - propertyOutForCounterparty - cashInForCounterparty;
 
   const reasons: string[] = [];
   if (propertyIn - propertyOut > 0) reasons.push("better property received");
@@ -363,11 +433,11 @@ export function evaluateTrade(
     const v = valuePropertyFor(state, id, proposerId, REFERENCE_DIFFICULTY);
     if (v.opponentDenial > 0) reasons.push(`denies opponent group: ${id}`);
   }
-  if (cashOut - propertyOut > proposerCash * 0.5) reasons.push("would endanger proposer liquidity");
+  if (cashOutRaw > proposerCash * 0.5) reasons.push("would endanger proposer liquidity");
 
   return {
-    cashIn: requestSats,
-    cashOut: offerSats,
+    cashIn: cashInRaw,
+    cashOut: cashOutRaw,
     propertyIn,
     propertyOut,
     valueToProposer,

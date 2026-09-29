@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyCommand, createMatchState } from "@ledgerlands/game-engine";
+import { DEFAULT_BOARD, applyCommand, createMatchState } from "@ledgerlands/game-engine";
 import type { MatchState, TeamState } from "@ledgerlands/shared-types";
 import {
   alreadyRefused,
+  chooseAiCommand,
   chooseTradeProposal,
   decideBid,
   evaluateIncomingTrade,
@@ -245,8 +246,14 @@ describe("trade proposals", () => {
 
   it("higher difficulties produce proposals where a favourable trade exists", () => {
     const s = solo();
+    // Group completion, not a plain swap. A bare one-for-one exchange of two
+    // tiles neither side needs is worth the same to both parties, so the
+    // mutual-benefit rule correctly finds nothing to propose: there is no
+    // version of the deal both sides win. The trade that does exist is the one
+    // where the tile is worth more to the requester than to the giver.
     grant(s, "copper-01", "p0");
-    grant(s, "obsidian-01", "p1");
+    grant(s, "copper-02", "p0");
+    grant(s, "copper-03", "p1");
     const proposal = chooseTradeProposal(s, "p0", "HARD");
     expect(proposal).not.toBeNull();
     if (proposal) {
@@ -256,6 +263,15 @@ describe("trade proposals", () => {
       for (const id of proposal.request.propertyIds) expect(s.properties[id]!.ownerId).toBe("p1");
       expect(proposal.offer.sats).toBeLessThanOrEqual(20_000);
     }
+  });
+
+  it("proposes nothing when no deal benefits both sides", () => {
+    // The mirror of the test above. A swap with no group logic behind it is
+    // zero-sum, and proposing it is spam that only ever gets refused.
+    const s = solo();
+    grant(s, "copper-01", "p0");
+    grant(s, "obsidian-01", "p1");
+    expect(chooseTradeProposal(s, "p0", "HARD")).toBeNull();
   });
 
   it("never proposes a tile the proposer does not own", () => {
@@ -305,7 +321,8 @@ describe("trade proposals", () => {
   it("does not re-propose a trade that was already refused", () => {
     const s = solo();
     grant(s, "copper-01", "p0");
-    grant(s, "obsidian-01", "p1");
+    grant(s, "copper-02", "p0");
+    grant(s, "copper-03", "p1");
     const first = chooseTradeProposal(s, "p0", "HARD");
     expect(first).not.toBeNull();
     if (!first) return;
@@ -606,5 +623,110 @@ describe("auction bidding", () => {
     expect(decideBid(build(), "p0", "copper-03", 1_000, "HARD")).toEqual(
       decideBid(build(), "p0", "copper-03", 1_000, "HARD"),
     );
+  });
+});
+
+/**
+ * The auction lifecycle, driven through the real engine.
+ *
+ * These exist because two auction bugs produced no test failure at all. Both
+ * showed up only as a simulation metric reading zero, which is exactly the kind
+ * of failure a unit test on the valuation maths cannot see:
+ *
+ *   1. `done.decline` was keyed off PROPERTY_OFFERED, which the engine emits
+ *      when a player LANDS on unowned land. Decline was therefore already
+ *      "done" on arrival, the decline branch was dead code, and no auction ever
+ *      opened.
+ *   2. A bot that declined to raise the bid simply ended its turn and stayed in
+ *      the auction. Nobody was ever out, the close condition was never met, and
+ *      the match deadlocked with the tile unpurchasable.
+ *
+ * So the assertions are about the auction REACHING a conclusion, not about what
+ * a bid should be.
+ */
+describe("auction lifecycle", () => {
+  /** Put a player on a tile and open an auction on it. */
+  function auctionOn(s: MatchState, tileId: string, playerId: string) {
+    const p = s.players.find((x) => x.id === playerId)!;
+    // Player position is the board's array offset, not a field on the tile.
+    p.position = DEFAULT_BOARD.findIndex((t) => t.id === tileId);
+    s.currentPlayerIndex = s.players.findIndex((x) => x.id === playerId);
+    s.turnPhase = "ACTION";
+    return applyCommand(s, { type: "DECLINE_PROPERTY", playerId } as never);
+  }
+
+  it("issues DECLINE_PROPERTY after really landing on unowned land", () => {
+    // This drives a real match through the engine rather than hand-placing a
+    // player, because the bug lived in how the AI read the EVENT LOG. Landing
+    // emits PROPERTY_OFFERED; a hand-built state never contains that event, so
+    // a test over a hand-built state passes whether or not the guard is correct.
+    // That is exactly the test I wrote first, and it passed with the bug
+    // deliberately restored.
+    const s = solo();
+    // Poor enough that buying is not an option, which is what routes the AI to
+    // the decline branch. A solvent player is offered DECLINE only after
+    // declining to BUY, so a well-funded fixture would test nothing.
+    for (const p of s.players) p.balance = 50;
+    let state = s;
+    // Play real turns until the current player is standing on unowned land with
+    // the engine's own PROPERTY_OFFERED in the log.
+    for (let i = 0; i < 40; i += 1) {
+      const cur = state.players[state.currentPlayerIndex];
+      if (!cur) break;
+      if (state.turnPhase === "ROLL") {
+        if (cur.inDetention && cur.balance >= 1000) {
+          state = applyCommand(state, { type: "PAY_DETENTION_FINE", playerId: cur.id } as never);
+          continue;
+        }
+        state = applyCommand(state, { type: "ROLL_DICE" } as never);
+        continue;
+      }
+      const tile = DEFAULT_BOARD[cur.position];
+      const prop = tile ? state.properties[tile.id] : undefined;
+      if (tile && prop && !prop.ownerId && state.log.some((e) => e.type === "PROPERTY_OFFERED" && e.playerId === cur.id)) {
+        const offered = state.log.filter((e) => e.type === "PROPERTY_OFFERED" && e.playerId === cur.id);
+        expect(offered.length).toBeGreaterThan(0);
+        // The AI must still be willing to decline, i.e. the offer event must
+        // NOT be read as "already declined".
+        const command = chooseAiCommand(state, cur.id, "HARD");
+        expect(command?.type).toBe("DECLINE_PROPERTY");
+        expect(state.auction).toBeUndefined();
+        return;
+      }
+      state = applyCommand(state, { type: "END_TURN", playerId: cur.id } as never);
+    }
+    throw new Error("never observed an unowned-land landing");
+  });
+
+  it("a player who will not raise passes instead of stalling forever", () => {
+    const s = solo();
+    let state = auctionOn(s, "copper-01", "p0");
+    // p0 opens and immediately cannot afford to raise; p1 will not either.
+    state.players[0]!.balance = 100;
+    state.players[1]!.balance = 100;
+
+    // Both sides decline to bid, and each must pass to leave the auction.
+    state.currentPlayerIndex = 0;
+    expect(chooseAiCommand(state, "p0", "HARD")?.type).toBe("PASS_AUCTION");
+    state = applyCommand(state, { type: "PASS_AUCTION", playerId: "p0" } as never);
+    state.currentPlayerIndex = 1;
+    expect(chooseAiCommand(state, "p1", "HARD")?.type).toBe("PASS_AUCTION");
+    state = applyCommand(state, { type: "PASS_AUCTION", playerId: "p1" } as never);
+
+    // Everyone is now out, so the auction can be closed rather than hanging.
+    state.currentPlayerIndex = 0;
+    expect(chooseAiCommand(state, "p0", "HARD")?.type).toBe("COMPLETE_AUCTION");
+  });
+
+  it("closes an auction rather than leaving the tile unpurchasable", () => {
+    const s = solo();
+    let state = auctionOn(s, "copper-01", "p0");
+    state.players[0]!.balance = 100;
+    state.players[1]!.balance = 100;
+    state = applyCommand(state, { type: "PASS_AUCTION", playerId: "p0" } as never);
+    state = applyCommand(state, { type: "PASS_AUCTION", playerId: "p1" } as never);
+    state.currentPlayerIndex = 0;
+    state = applyCommand(state, { type: "COMPLETE_AUCTION", playerId: "p0" } as never);
+    expect(state.auction).toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@
  */
 export {
   alreadyRefused,
+  chooseAiCommand,
   chooseTradeProposal,
   decideBid,
   evaluateIncomingTrade,

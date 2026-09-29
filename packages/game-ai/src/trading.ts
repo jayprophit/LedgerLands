@@ -18,12 +18,15 @@
 import type { GameCommand, MatchState, PlayerId, TileId } from "@ledgerlands/shared-types";
 import { DEFAULT_BOARD, areTeammates, isOpponent, purchasePriceFor } from "@ledgerlands/game-engine";
 import {
+  cashValueFor,
   evaluateTrade,
   groupOwnership,
   groupOf,
   preservesLiquidity,
   valuePropertyFor,
+  valueTilesFor,
   weightsFor,
+  REFERENCE_DIFFICULTY,
 } from "./valuation.js";
 
 export type { Difficulty } from "./index.js";
@@ -122,7 +125,7 @@ export function chooseTradeProposal(
           // Never trade a tile for itself.
           if (give.some((g) => want.includes(g))) continue;
 
-          for (const cashSide of cashAmounts(state, me, shape, counterpartyId, give, want)) {
+          for (const cashSide of cashAmounts(state, me, shape, counterpartyId, give, want, difficulty)) {
             const offer = { sats: cashSide.offerSats, propertyIds: give };
             const request = { sats: cashSide.requestSats, propertyIds: want };
             if (offer.sats === 0 && offer.propertyIds.length === 0) continue;
@@ -132,9 +135,15 @@ export function chooseTradeProposal(
 
             const ev = evaluateTrade(state, playerId, counterpartyId, offer, request, difficulty);
             if (!preservesLiquidity(state, playerId, offer.sats, difficulty)) continue;
-            // Must clear the proposer's own margin, else it is not a trade the
-            // proposer wants. The receiver judges acceptability separately.
+            // The proposer's own margin.
             if (ev.valueToProposer <= 0) continue;
+            // And the counterparty's. Two rational agents rarely agree on value,
+            // so proposing only what suits us is just spam: every such deal is
+            // rejected and the turn is wasted. A trade is a trade only when both
+            // sides gain, which happens precisely where the two valuation
+            // models differ — a tile that completes MY group is worth more to
+            // me than to them, and the price sits between.
+            if (ev.valueToCounterparty <= 0) continue;
             // Refuse to re-propose something already refused in this match.
             // Without this, two bots can bounce identical terms forever and the
             // simulation never terminates.
@@ -149,9 +158,6 @@ export function chooseTradeProposal(
             if (considered++ > maxCandidates) break;
 
             const score = ev.valueToProposer * (1 + w.proposeMargin);
-            // A wildly one-sided deal in the counterparty's favour is spam even
-            // if the proposer likes it.
-            if (ev.valueToCounterparty <= -me.balance * 0.5) continue;
             if (!best || score > best.score || (score === best.score && shape.label < best.shape)) {
               best = {
                 counterpartyId,
@@ -205,7 +211,18 @@ function pickUpTo(
   return out.slice(0, 5);
 }
 
-/** Cash legs to consider, kept to a small fixed ladder. */
+/**
+ * Cash legs to consider, placed INSIDE the band where both sides gain.
+ *
+ * For a tile the proposer wants, the two valuations differ:
+ *
+ *   theirValue  what the tile is worth to the counterparty
+ *   myValue     what it is worth to the proposer (higher when it completes my group)
+ *
+ * A price strictly between them leaves a surplus on both sides. Asking at face
+ * value, or at the proposer's own valuation, is how you get a proposal that is
+ * rejected every time.
+ */
 function cashAmounts(
   state: MatchState,
   me: MatchState["players"][number],
@@ -213,38 +230,71 @@ function cashAmounts(
   counterpartyId: PlayerId,
   give: TileId[],
   want: TileId[],
+  difficulty: string,
 ): Array<{ offerSats: number; requestSats: number }> {
-  if (!shape.cash) return [{ offerSats: 0, requestSats: 0 }];
   const counterparty = state.players.find((p) => p.id === counterpartyId);
   const theirCash = counterparty?.balance ?? 0;
 
   const options: Array<{ offerSats: number; requestSats: number }> = [{ offerSats: 0, requestSats: 0 }];
+  if (!shape.cash) return options;
 
-  // Asking for cash alongside property: three price points, so a receiver has
-  // something in range rather than an all-or-nothing demand.
+  // Buying a tile with cash: aim for the middle of the band. The band is between
+  // the two parties' VALUATIONS, and cash is valued marginally per party, so a
+  // solvent seller and a stretched buyer genuinely meet in the middle. A flat
+  // face-value ask lands outside the band almost every time, which is why an
+  // earlier version proposed hundreds of deals and got zero acceptances.
   if (want.length > 0) {
-    const askFor = faceValue(want);
-    for (const factor of [0.6, 0.8, 1.0]) {
-      const amount = roundStep(askFor * factor);
-      if (amount > 0 && amount <= theirCash) options.push({ offerSats: 0, requestSats: amount });
+    const myValue = valueTilesFor(state, want, me.id, REFERENCE_DIFFICULTY);
+    const theirValue = valueTilesFor(state, want, counterpartyId, REFERENCE_DIFFICULTY);
+    if (myValue > theirValue) {
+      // Convert the value gap into a price using the BUYER's marginal cash
+      // value, since that is the side the cash actually has to satisfy.
+      const lo = theirValue;
+      const hi = myValue;
+      for (const fraction of [0.3, 0.5, 0.7]) {
+        const target = lo + (hi - lo) * fraction;
+        // The largest nominal price the buyer's cash is still worth this much.
+        const amount = roundStep(nominalForValue(state, counterpartyId, target, difficulty));
+        if (amount > 0 && amount <= theirCash) options.push({ offerSats: 0, requestSats: amount });
+      }
     }
   }
-  // Offering cash for property: derived from what we are giving up, so the ask
-  // scales with the deal instead of being a fixed number.
+
+  // Selling a tile for cash: the mirror image.
   if (give.length > 0 && want.length === 0) {
-    const ask = roundStep(faceValue(give) * 0.5);
-    if (ask > 0 && ask <= me.balance) options.push({ offerSats: ask, requestSats: 0 });
+    const myValue = valueTilesFor(state, give, me.id, REFERENCE_DIFFICULTY);
+    const theirValue = valueTilesFor(state, give, counterpartyId, REFERENCE_DIFFICULTY);
+    if (theirValue > myValue) {
+      for (const fraction of [0.3, 0.7]) {
+        const target = myValue + (theirValue - myValue) * fraction;
+        const amount = roundStep(nominalForValue(state, counterpartyId, target, difficulty));
+        if (amount > 0 && amount <= theirCash) options.push({ offerSats: amount, requestSats: 0 });
+      }
+    }
   }
   return options;
 }
 
-function faceValue(tileIds: readonly TileId[]): number {
-  let sum = 0;
-  for (const id of tileIds) {
-    const t = DEFAULT_BOARD.find((b) => b.id === id);
-    if (t) sum += purchasePriceFor(t);
+/**
+ * The largest nominal sats amount whose marginal value to `playerId` is still at
+ * least `target`.
+ *
+ * Found by search rather than algebra because the cushion curve is not
+ * invertible in closed form, and because a search makes the monotonicity
+ * assumption explicit: more sats is never worth less than fewer.
+ */
+function nominalForValue(state: MatchState, playerId: PlayerId, target: number, difficulty: string): number {
+  const balance = state.players.find((p) => p.id === playerId)?.balance ?? 0;
+  if (target <= 0) return 0;
+  let lo = 0;
+  let hi = Math.min(balance, target * 4);
+  if (hi <= lo) return 0;
+  for (let i = 0; i < 24; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (cashValueFor(state, playerId, mid, difficulty) >= target) lo = mid;
+    else hi = mid;
   }
-  return sum;
+  return lo;
 }
 
 /** Round to a step that scales with magnitude, so asks are legible. */
