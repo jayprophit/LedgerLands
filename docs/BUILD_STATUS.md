@@ -99,10 +99,10 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **184 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Totals: **194 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
 Breakdown: game-engine 27 · match-store 40 · tournaments 36 · marketplace 21 ·
-auth 19 · matchmaking 15 · api 16 · ranked 4 · ledger 3 · game-ai 3 ·
-blockchain 0 (no tests yet).
+auth 19 · matchmaking 15 · api 16 · blockchain 10 · ranked 4 · ledger 3 ·
+game-ai 3.
 
 Reproduce with `node scripts/test-totals.mjs` (it runs each workspace suite and
 sums the vitest summaries). Prior reports of "178" were a miscount — the
