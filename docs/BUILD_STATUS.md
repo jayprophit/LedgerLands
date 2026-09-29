@@ -156,6 +156,8 @@ blocker is recorded and the independent work proceeded.
 | 2v2 matchmaking | `TEAM_2V2` in the supported set and tick loop; `formTwoVTwoTeams`; `MatchFactory` receives `teams` | matchmaking 15 → 27 |
 | 2v2 ranked ingestion | team win → four individual results; no shared pool; eliminated players keep a blank rating | ranked 4 → 9 |
 | 2v2 simulation baseline | `scripts/simulate-teams.mjs`, 200 paired games per mode, FFA_4 vs TEAM_2V2 | see `docs/simulation/` |
+| 2v2 economy experiment | `scripts/team-economy.mjs` + `scripts/lib/sim-driver.mjs`, 1000 paired games per arm, degenerate-strategy probes, AI-command integrity counter | see `docs/analysis/TEAM_2V2_ECONOMY.md` |
+| Suffix fast path | all three backends select on the storage sequence; a valid suffix is no longer rejected as corrupt | match-store 67 → 69 |
 
 ## Known issues (current)
 
@@ -187,12 +189,17 @@ blocker is recorded and the independent work proceeded.
    no KYC/age verification, and no TOTP/WebAuthn verification ceremony. Dispute
    resolution remains simulated (role string, no identity provider) and replay
    signing is off by default.
-8. **2v2 is implemented but not balanced, and two of its rules are untested by
-   simulation**: the bots never trade and auctions are near-degenerate (≈1.0
-   bids each), so D4's teammate-trade and teammate-auction decisions rest on unit
-   tests alone. There is no party/duo queueing, no rating band for `TEAM_2V2`,
-   and no tournament format for team rounds. See
-   `docs/DESIGN/TEAM_2V2.md` and `docs/simulation/TEAM_2V2_BASELINE.md`.
+8. **2v2 is implemented and now exercised by simulation, but not balanced**: over
+   1000 paired games the bots trade (8,474 proposals, 83% accepted, 6,250 teammate
+   trades) and bid (20,645 auctions, 4.43 bids each), so D4's teammate-trade and
+   teammate-auction decisions no longer rest on unit tests alone. What the data
+   shows is that teammate cooperation is NOT degenerate in the monopoly sense —
+   top-holder concentration falls from 0.988 (FFA) to 0.721 — but teammate auction
+   rivalry destroys more sats (6.05M) than any other behaviour measured (2.35M for
+   sacrificial trades), which is a rule question, not a bot one. There is still no
+   party/duo queueing, no rating band for `TEAM_2V2`, and no tournament format for
+   team rounds. See `docs/analysis/TEAM_2V2_ECONOMY.md` and
+   `docs/DESIGN/TEAM_2V2.md`.
 9. Marketplace state is in-memory; no listing/offer/auction persistence, and no
    anti-sniping extension on auctions.
 10. `npm audit`: 0 production advisories; 4 high dev-only (documented, not
