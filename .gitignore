@@ -16,3 +16,8 @@ apps/web/dist/
 apps/api/dist/
 packages/*/dist/
 postgres-data/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+.match-data/
