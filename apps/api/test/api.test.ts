@@ -207,6 +207,45 @@ describe("API integration", () => {
     expect((me.json() as any).principal.playerId).toBe(login.principal.playerId);
     const anon = await app.inject({ method: "GET", url: "/api/auth/me" });
     expect(anon.statusCode).toBe(401);
+
+    // Session composition, including anti-replay on a stale counter.
+    const session = await post("/api/auth/session", { token: login.token });
+    expect(session.session.provider).toBe("dev");
+    expect(session.session.mfaSatisfied).toBe(false);
+    const second = await post("/api/auth/session", { token: login.token });
+    expect(second.session.counter).toBe(session.session.counter + 1);
+    const stale = await app.inject({
+      method: "POST",
+      url: "/api/auth/authorize",
+      payload: {
+        sessionId: session.session.sessionId,
+        counter: session.session.counter,
+        operation: "play-match",
+      },
+    });
+    expect(stale.statusCode).toBe(401); // replayed counter
+  });
+
+  it("refuses a privileged operation on a dev session", async () => {
+    const login = await post("/api/auth/dev/login", { displayName: "Step Up" });
+    const session = await post("/api/auth/session", { token: login.token });
+    const play = await post("/api/auth/authorize", {
+      sessionId: session.session.sessionId,
+      counter: session.session.counter,
+      operation: "play-match",
+    });
+    expect(play.authorized).toBe(true);
+    const withdraw = await app.inject({
+      method: "POST",
+      url: "/api/auth/authorize",
+      payload: {
+        sessionId: session.session.sessionId,
+        counter: session.session.counter,
+        operation: "withdraw",
+      },
+    });
+    expect(withdraw.statusCode).toBe(403);
+    expect((withdraw.json() as any).error).toBe("STEP_UP_UNAVAILABLE");
   });
 
   it("matchmakes two players into an authoritative match", async () => {

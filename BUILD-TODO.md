@@ -170,7 +170,11 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Threat model (docs/security/THREAT_MODEL.md).
 - [x] npm advisory triage (docs/security/ADVISORY_TRIAGE.md; 0 production advisories).
 - [x] Dev authentication adapter with an explicit non-production boundary (`packages/auth`).
+- [x] Auth composition: session records with anti-replay counters, MFA boundary, production guard
+      that fails loud, and inert/mock adapters for the future provider set (docs/AUTH.md).
 - [x] Replay tamper-evidence documented precisely (docs/REPLAY.md).
+- [x] Optional replay signing via a pluggable `ReplaySigner`; off by default, no key committed.
+- [x] Simulated dispute workflow bound to filed replay hashes (revalidate + audit trail).
 - [ ] Rate limiting/anti-automation.
 - [ ] Fraud/collusion detection.
 - [ ] KYC/age/jurisdiction provider adapters if real-value features are pursued.

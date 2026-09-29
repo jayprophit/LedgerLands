@@ -18,7 +18,15 @@ import {
   type ReplaySigner,
   type StorageBackend,
 } from "@ledgerlands/match-store";
-import { DevAuthAdapter, type AuthPrincipal } from "@ledgerlands/auth";
+import {
+  AuthPolicyError,
+  AuthService,
+  DEFAULT_AUTH_POLICY,
+  DevAuthAdapter,
+  ProductionGuard,
+  type AuthPolicy,
+  type AuthPrincipal,
+} from "@ledgerlands/auth";
 import { MarketplaceService, MarketplaceError, type MarketplaceAssetKind } from "@ledgerlands/marketplace";
 import { DoubleEntryLedger } from "@ledgerlands/ledger";
 import {
@@ -414,6 +422,31 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
   }));
 
   // ---- Dev auth (NOT production auth; see packages/auth) ----
+  // The guard is evaluated at boot: a dev adapter must never be reachable in a
+  // production profile. This is a fail-loud safeguard, not a warning.
+  const authPolicy: AuthPolicy = {
+    ...DEFAULT_AUTH_POLICY,
+    production: process.env.LEDGERLANDS_ENV === "production",
+    allowedProviders: (process.env.LEDGERLANDS_AUTH_PROVIDERS ?? "dev")
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p): p is AuthPolicy["allowedProviders"][number] =>
+        ["dev", "email", "google", "apple", "wallet", "passkey", "aetherius"].includes(p),
+      ),
+  };
+  const authGuard = new ProductionGuard(authPolicy);
+  const authService = new AuthService([auth], authGuard);
+  if (authPolicy.production) {
+    try {
+      authGuard.assertNoDevAuth([auth]);
+    } catch (error) {
+      // Refuse to serve rather than run with passwordless dev sessions.
+      // eslint-disable-next-line no-console
+      console.error(`[ledgerlands] refusing to start: ${(error as Error).message}`);
+      process.exit(1);
+    }
+  }
+
   app.post<{ Body: { displayName?: string } }>("/api/auth/dev/login", async (request, reply) => {
     try {
       const { principal, token } = auth.loginDev(request.body?.displayName ?? "");
@@ -427,6 +460,42 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
     const principal = bearer(request.headers.authorization, auth);
     if (!principal) return reply.code(401).send({ error: "unauthorized" });
     return { principal };
+  });
+
+  app.post<{ Body: { token?: string } }>("/api/auth/session", async (request, reply) => {
+    const token = request.body?.token;
+    if (!token) return reply.code(400).send({ error: "token is required" });
+    try {
+      const session = authService.establish(token);
+      return { session };
+    } catch (error) {
+      return ruleError(reply, error);
+    }
+  });
+
+  /**
+   * Step-up gate. Dev sessions can never authorize a privileged operation —
+   * this is the server-side enforcement of that rule, so it does not depend on
+   * a client behaving.
+   */
+  app.post<{
+    Body: { sessionId?: string; counter?: number; operation?: string };
+  }>("/api/auth/authorize", async (request, reply) => {
+    const { sessionId, counter, operation } = request.body ?? {};
+    if (!sessionId || counter === undefined || !operation) {
+      return reply.code(400).send({ error: "sessionId, counter and operation are required" });
+    }
+    const session = authService.resolve(sessionId, counter);
+    if (!session) return reply.code(401).send({ error: "invalid or stale session" });
+    try {
+      authService.assertAuthorized(session, operation);
+      return { authorized: true, operation };
+    } catch (error) {
+      if (error instanceof AuthPolicyError) {
+        return reply.code(403).send({ error: error.code, message: error.message });
+      }
+      return ruleError(reply, error);
+    }
   });
 
   // ---- Matchmaking (durable queue; claim creates the authoritative match) ----
@@ -622,6 +691,9 @@ function ruleError(reply: any, error: unknown) {
   }
   if (error instanceof SigningError) {
     return reply.code(500).send({ error: error.code, message: error.message });
+  }
+  if (error instanceof AuthPolicyError) {
+    return reply.code(403).send({ error: error.code, message: error.message });
   }
   // eslint-disable-next-line no-console
   console.error(error);

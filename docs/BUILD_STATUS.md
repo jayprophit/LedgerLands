@@ -99,9 +99,14 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **178 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
-Breakdown: engine 27 · match-store 40 · tournaments 36 · marketplace 21 ·
-matchmaking 15 · api 15 · ranked 4 · ledger 3 · ai 3 · auth 3.
+Totals: **184 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Breakdown: game-engine 27 · match-store 40 · tournaments 36 · marketplace 21 ·
+auth 19 · matchmaking 15 · api 16 · ranked 4 · ledger 3 · game-ai 3 ·
+blockchain 0 (no tests yet).
+
+Reproduce with `node scripts/test-totals.mjs` (it runs each workspace suite and
+sums the vitest summaries). Prior reports of "178" were a miscount — the
+breakdown never matched the stated total.
 
 ### LL-P17 performance (applied this pass)
 
@@ -127,6 +132,7 @@ matchmaking 15 · api 15 · ranked 4 · ledger 3 · ai 3 · auth 3.
 | Marketplace offers | buyer-initiated, asset-locking, party-restricted lifecycle, revalidated at accept | 18 new marketplace tests |
 | Marketplace auctions | min increments, injected server clock, late bid still settleable, cancel is terminal | included above |
 | Marketplace bundles | all-or-nothing: pre-flight validation, transfer only after all legs | included above |
+| Auth hardening | `AuthService` (anti-replay session counters), `MfaService`, `ProductionGuard` (fails loud on dev-in-production), inert/mock adapters for the future provider set, server-side step-up endpoint | 19 auth tests (+16), 16 API tests (+1) |
 
 ## Known issues (current)
 
@@ -142,13 +148,17 @@ matchmaking 15 · api 15 · ranked 4 · ledger 3 · ai 3 · auth 3.
 4. **Per-command cost remains ~1.9 s/game locally**, dominated by the engine's
    pure `applyCommand` clone + bot decisioning. The `PostgresBackend` avoids
    the store-side cost by writing one row per command.
-4. Replay export is **tamper-evident, not signed**; no dispute workflow
-   service yet (`docs/REPLAY.md`).
-5. Matchmaking is O(n²) in queue length; fine for hundreds, not thousands.
-6. Non-dev auth providers, admin identity for disputes, and 2v2 team economics
-   remain NOT_STARTED. Dispute resolution is simulated (role string, no identity
-   provider) and replay signing is off by default.
-7. Marketplace state is in-memory; no listing/offer/auction persistence, and no
+5. Replay signing and the dispute workflow are **implemented but inert by
+   default** (`docs/REPLAY.md`): the dispute service is simulated and
+   `DisputeService` has no real admin identity provider behind it.
+6. Matchmaking is O(n²) in queue length; fine for hundreds, not thousands.
+7. Auth is architecture only: no real provider integration, no password storage,
+   no KYC/age verification, and no TOTP/WebAuthn verification ceremony. Dispute
+   resolution remains simulated (role string, no identity provider) and replay
+   signing is off by default.
+8. 2v2 team economics remain unimplemented pending a design decision
+   (`docs/DESIGN/TEAM_2V2.md`).
+9. Marketplace state is in-memory; no listing/offer/auction persistence, and no
    anti-sniping extension on auctions.
-7. `npm audit`: 0 production advisories; 4 high dev-only (documented, not
-   force-fixed by policy).
+10. `npm audit`: 0 production advisories; 4 high dev-only (documented, not
+    force-fixed by policy).

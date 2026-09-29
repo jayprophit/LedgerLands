@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DevAuthAdapter } from "../src/index.js";
+import { AuthService, DevAuthAdapter } from "../src/index.js";
 
 describe("DevAuthAdapter", () => {
   it("mints a verifiable dev session bound to a stable playerId", () => {
@@ -24,14 +24,19 @@ describe("DevAuthAdapter", () => {
     expect(auth.verifyToken(token, 1_000_500)).toBeNull();
   });
 
-  it("refuses step-up for privileged operations on dev sessions", () => {
-    const auth = new DevAuthAdapter({ secret: "s" });
-    const { principal } = auth.loginDev("Tester");
+  it("never satisfies a privileged operation on a dev session", () => {
+    const dev = new DevAuthAdapter({ secret: "s" });
+    const svc = new AuthService([dev]);
+    const { token } = dev.loginDev("Tester", 1_000_000);
+    const session = svc.establish(token, 1_000_000);
+    // Even after MFA is "satisfied", a dev session must be refused.
+    svc.satisfyMfa(session.sessionId);
+    const live = svc.resolve(session.sessionId, session.counter, 1_000_000)!;
     try {
-      auth.assertStepUp(principal, "withdraw");
+      svc.assertAuthorized(live, "withdraw");
       expect.unreachable();
     } catch (error) {
-      expect((error as { code: string }).code).toBe("STEP_UP_REQUIRED");
+      expect((error as { code: string }).code).toBe("STEP_UP_UNAVAILABLE");
     }
   });
 });
