@@ -172,6 +172,8 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Dev authentication adapter with an explicit non-production boundary (`packages/auth`).
 - [x] Auth composition: session records with anti-replay counters, MFA boundary, production guard
       that fails loud, and inert/mock adapters for the future provider set (docs/AUTH.md).
+- [x] 2v2 team economics specified with open product decisions (docs/DESIGN/TEAM_2V2.md);
+      implementation deliberately deferred until those are answered.
 - [x] Replay tamper-evidence documented precisely (docs/REPLAY.md).
 - [x] Optional replay signing via a pluggable `ReplaySigner`; off by default, no key committed.
 - [x] Simulated dispute workflow bound to filed replay hashes (revalidate + audit trail).

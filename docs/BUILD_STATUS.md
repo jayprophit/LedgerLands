@@ -145,9 +145,14 @@ breakdown never matched the stated total.
 3. **FileBackend still has no partial physical I/O** (single JSON document per
    match). Logical suffix selection only; a segmented format needs versioning +
    migration, so compatibility was kept. See `docs/PERSISTENCE.md`.
-4. **Per-command cost remains ~1.9 s/game locally**, dominated by the engine's
-   pure `applyCommand` clone + bot decisioning. The `PostgresBackend` avoids
-   the store-side cost by writing one row per command.
+4. **A full match is O(n²) in commands**, measured not guessed: `applyCommand`
+   opens with `structuredClone` and the event log grows every command, so
+   per-command cost scales linearly with log length (0.35 ms at 53 events,
+   6.66 ms at 2000). Profiling attributes **99.1%** of match time to that
+   clone and only 0.7% to AI decisioning. Snapshots short-circuit it on
+   rebuild; `PostgresBackend` avoids it on write. Fixing it properly means
+   sharing the append-only log by reference, which is a correctness change
+   needing a long-match determinism test first. See `docs/PERFORMANCE.md`.
 5. Replay signing and the dispute workflow are **implemented but inert by
    default** (`docs/REPLAY.md`): the dispute service is simulated and
    `DisputeService` has no real admin identity provider behind it.
@@ -156,8 +161,10 @@ breakdown never matched the stated total.
    no KYC/age verification, and no TOTP/WebAuthn verification ceremony. Dispute
    resolution remains simulated (role string, no identity provider) and replay
    signing is off by default.
-8. 2v2 team economics remain unimplemented pending a design decision
-   (`docs/DESIGN/TEAM_2V2.md`).
+8. 2v2 team economics are **specified but not implemented**; five product
+   decisions are open in `docs/DESIGN/TEAM_2V2.md` (rent attribution, team
+   bankruptcy, win condition, auctions/trades, starting balances). No engine
+   change has been made.
 9. Marketplace state is in-memory; no listing/offer/auction persistence, and no
    anti-sniping extension on auctions.
 10. `npm audit`: 0 production advisories; 4 high dev-only (documented, not

@@ -1,6 +1,7 @@
 # Performance baseline (LL-P16)
 
-Date: 2026-09-28 · Machine: developer workstation · Command: `node scripts/bench.mjs`
+Date: 2026-09-29 · Machine: developer workstation
+Commands: `node scripts/bench.mjs`, `node scripts/profile-engine.mjs`
 **These are small-local numbers. They are not production capacity claims.**
 
 ## Measurements
@@ -43,6 +44,52 @@ issues a real indexed `WHERE matchId = ? AND seq > ?` range query; that path is
    `applyCommand` plus bot decisioning, which is inherent to a pure
    event-sourced design. `PostgresBackend` avoids it entirely by writing one
    row per command.
+
+   Measured breakdown (20 bot-vs-bot matches, `node scripts/profile-engine.mjs`):
+
+   | Phase | Share |
+   |---|---|
+   | `applyCommand` (clone + rules) | **99.1%** |
+   | AI decisioning | 0.7% |
+   | driver overhead | 0.2% |
+
+   So the earlier note attributing cost to "clone **plus** bot decisioning" was
+   wrong about the split: decisioning is noise. The cost is the clone alone.
+
+### Why the clone is not a constant: log length drives it
+
+`applyCommand` opens with `structuredClone(original)` (`engine.ts:415`), and
+`original.log` grows by roughly 1.5 events per command. The clone therefore
+copies an ever-growing array on every single command — a match is O(n²) in
+commands, not O(n). Measured on one seeded match, extended to increasing
+lengths:
+
+| `log` length | commands replayed | `applyCommand` ms/cmd | full replay ms |
+|---|---|---|---|
+| 53 | 26 | 0.35 | 4.2 |
+| 200 | 100 | 0.76 | 43.0 |
+| 801 | 396 | 2.79 | 536.2 |
+| 2000 | 983 | 6.66 | 3,131.1 |
+
+The per-command cost scales linearly with log length, and replay cost scales
+quadratically. Isolating it: at `log` = 770, `structuredClone` of the full
+state is 2.28 ms while the same state with `log` emptied is 0.068 ms — a
+**33× difference for the log alone**, with the rules doing the rest.
+
+This is a real design limit, not a tuning miss, and it has not been fixed:
+
+- the purity of `applyCommand` is what makes seeded replay verifiable, so the
+  clone cannot simply be removed;
+- the event log is append-only and never read by the rules, so it is the one
+  field that could be shared by reference across states — but that would make
+  the returned state alias the input's log, and any consumer that mutates
+  `state.log` would corrupt a prior revision. That is a correctness change, not
+  an optimisation, and it needs a determinism test over a long match first.
+
+Until then the honest mitigation is the one already in place: **keep
+snapshots**. A snapshot short-circuits the quadratic path on rebuild, and
+`PostgresBackend` avoids it on the write side entirely by storing one row per
+command.
 
 2. **FileBackend still rewrites the entire record per command** — O(commands²)
    bytes on disk. Local durability stand-in only, not a production store.
