@@ -8,7 +8,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "oracle:capture": "cross-env ORACLE_CAPTURE=1 vitest run test/oracle/capture.test.ts",
+    "oracle:check": "vitest run test/oracle/capture.test.ts"
   },
   "dependencies": {
     "@ledgerlands/shared-types": "0.1.0"

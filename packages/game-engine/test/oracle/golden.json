@@ -1,0 +1,674 @@
+{
+  "movement-and-pass-start": {
+    "stateHash": "9db8915f4d07bb741ee5217312e3f13a9b707518e5ec7086e03af79bbb58f9b1",
+    "eventsHash": "48279e8365271a7a72d6470d973741408866c11d284cf57ae76b715292a9b227",
+    "oracleHash": "54022f9a1189d5c4b204552154eae845e2364bd625801e84ede4cdbfce09e8b7",
+    "commands": 233,
+    "events": 415,
+    "turns": 85,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 22550,
+      "propertyCount": 26,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 10305,
+          "properties": 13,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 12245,
+          "properties": 13,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "purchase-and-mortgage-cycle": {
+    "stateHash": "525b4599375d3e57e169bbf14c41a32cf30fa589e30e037b113aee4abd762246",
+    "eventsHash": "7f9bc5e264748a2be05c6fe3495ecfcbd9b928c497815c51130dc3eb6aa9bbe5",
+    "oracleHash": "d95e25ab79be20353c24c70a16dab062e9e2cf2c44a0a871d6534743bbb5b6d2",
+    "commands": 240,
+    "events": 421,
+    "turns": 89,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 46320,
+      "propertyCount": 29,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 19625,
+          "properties": 8,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 11100,
+          "properties": 10,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 15595,
+          "properties": 11,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "decline-triggers-auction": {
+    "stateHash": "acf137fbd0dc3ea8053960763b6f6befd0b51c971a05da573d4c73347bfe4d27",
+    "eventsHash": "2a0234018c6ca5ab664beda4baebc71503223cc401e86fb62d88f6c066486065",
+    "oracleHash": "d664ded096073d9cc46714937a00bea927134c9a2fc36cecb4b9b7de9607205a",
+    "commands": 231,
+    "events": 409,
+    "turns": 83,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 49800,
+      "propertyCount": 26,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 11670,
+          "properties": 13,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 21355,
+          "properties": 5,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 16775,
+          "properties": 8,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "rent-between-players": {
+    "stateHash": "b671500dad70b95f5ff7598c1cbb8971a1e5481185929fc3e3411dc61e6c3349",
+    "eventsHash": "d4c95e931ee7e8b522ffc2263d6488585e4162de757f62ebc43590cd00ea3aff",
+    "oracleHash": "844024605ddf6a56b51ba024252f0d1c586d1ca351ca4ffe3dd16efb7c820511",
+    "commands": 235,
+    "events": 421,
+    "turns": 89,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 45950,
+      "propertyCount": 29,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 18130,
+          "properties": 9,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 12090,
+          "properties": 11,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 15730,
+          "properties": 9,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "monopoly-doubles-rent": {
+    "stateHash": "744f5fd0056673a9644a7ce8f1eb654481db2e40bb281257010596868bcce055",
+    "eventsHash": "20bd253f7da2f434a00a9ce54c4fbc80ec93701abe47061bf2f5ed097eaa053a",
+    "oracleHash": "c6335a78a7edc0b81898c714080bb7b4ecaef85f66dfaef2dcb711bd9f9623ec",
+    "commands": 6,
+    "events": 9,
+    "turns": 1,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 88700,
+      "propertyCount": 3,
+      "developedCount": 3,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 28700,
+          "properties": 3,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 30000,
+          "properties": 0,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 30000,
+          "properties": 0,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "transit-and-service": {
+    "stateHash": "86543a70ae7ccd0430ccc385bda55d18948cba9d13825c383ad4cda68f12b037",
+    "eventsHash": "a3f218743e968390d83e205232b71861574133af46058dfb031286918460c2d1",
+    "oracleHash": "4b6bfb3f6a52704caf8c6b949941f966b65baafd63d02519dc63166eb531069a",
+    "commands": 233,
+    "events": 416,
+    "turns": 83,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 47325,
+      "propertyCount": 27,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 19435,
+          "properties": 9,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 6995,
+          "properties": 10,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 20895,
+          "properties": 8,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "detention-fine-and-card": {
+    "stateHash": "f3c87f20bf718e869517a63ff4d04707198de56e3be7e8b1351a1492866e9ca9",
+    "eventsHash": "8e014b996961ee2a9bad5c97bf26eecfacbfcdc9c21035dd632a9d58e88d14f0",
+    "oracleHash": "eb47119d4fbad046324e040259068bc9f183bc1873c9e5ceffca8869dadb3c39",
+    "commands": 29,
+    "events": 49,
+    "turns": 8,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 79650,
+      "propertyCount": 6,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 25150,
+          "properties": 3,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 26100,
+          "properties": 2,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 28400,
+          "properties": 1,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "detention-fine-paid": {
+    "stateHash": "8b9fa64aa3a94e8d53d4c41c8ea945e6896535a16abba447ae34f316309674e9",
+    "eventsHash": "03983ffcc43a4e2bb33d50cabafba567fa0b6cd60e74d18df289d5d45de508d1",
+    "oracleHash": "99588bf3a5ad85ba1be566c80f36b144434b28ffe195e5e7d39eeafeb7482aa4",
+    "commands": 36,
+    "events": 61,
+    "turns": 9,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 80425,
+      "propertyCount": 7,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 28125,
+          "properties": 1,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 23770,
+          "properties": 4,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 28530,
+          "properties": 2,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "detention-card-used": {
+    "stateHash": "4886afcf3e8eb6a2bb52aa134733ffc337a039e35bf287f70cc08882476fa1b3",
+    "eventsHash": "f75935611400abeab8bfa049d04dda6ae48cf7e25c516d29c56d4714b27a7c40",
+    "oracleHash": "5adb9c0c1724872c34ded8de1d436931610024185cd2203b566c8ca8e06813a9",
+    "commands": 38,
+    "events": 59,
+    "turns": 7,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 72900,
+      "propertyCount": 10,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 24200,
+          "properties": 4,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 23700,
+          "properties": 3,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 25000,
+          "properties": 3,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "trade-accept": {
+    "stateHash": "abf6f33a6303c5fcf39a5d41e75e74dff211a8c00651a12efde11a3cb7cbdc52",
+    "eventsHash": "061a751a1cec69b687239095bae9f21e867312fc7e75b01825c28592ab0c2c04",
+    "oracleHash": "82092f5f94a040ff5fb5bcd8c3441cd3662a9efdb1b21237e7c4fc560877c5e6",
+    "commands": 237,
+    "events": 435,
+    "turns": 91,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 46850,
+      "propertyCount": 26,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 9115,
+          "properties": 9,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 12480,
+          "properties": 9,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 25255,
+          "properties": 8,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "trade-reject": {
+    "stateHash": "bc9f1feeb6d050db442aff4d7f47789fe6d336bb6344ae29c1eaee36ee889423",
+    "eventsHash": "95466ce5f78c86afe4b154e64c2369a1eda12f6b701082bcc8aebe86e25e5a82",
+    "oracleHash": "9dca28ec1114f2eca4a3e4e00d80f386ebe9044b60d633868fb20ff8392a66d9",
+    "commands": 236,
+    "events": 429,
+    "turns": 97,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 45000,
+      "propertyCount": 29,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 15720,
+          "properties": 12,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 19280,
+          "properties": 7,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 10000,
+          "properties": 10,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "creditor-bankruptcy": {
+    "stateHash": "16f67ff9fda73e0dacff78f0b5ec62283fcaa8d9d949bf5b9fcbc9c830177cad",
+    "eventsHash": "0659b549a63058943007c6153de514017e24cbeeda23a967325578154b799ec6",
+    "oracleHash": "0e6fc43f5040ae932e1c00a5079b093f6cfa2fbe725db2870ba090057ff4abc6",
+    "commands": 3,
+    "events": 11,
+    "turns": 1,
+    "status": "COMPLETED",
+    "winnerId": "p0",
+    "economy": {
+      "totalBalance": 40220,
+      "propertyCount": 2,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 40220,
+          "properties": 2,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 0,
+          "properties": 0,
+          "bankrupt": true
+        }
+      ]
+    }
+  },
+  "bankruptcy-without-creditor": {
+    "stateHash": "36903aa4dc1fe3fcaeed170a42706ba4a763bd52acabf24644e35dcc70f736d4",
+    "eventsHash": "5faec2e77d7008a03fa68983273dbdf12e5ef7d7d958a18c882bc65f81f527da",
+    "oracleHash": "e0821b27e4063efa1327240b649681bd25f588da48864765c74cac1cf840fb0f",
+    "commands": 12,
+    "events": 22,
+    "turns": 3,
+    "status": "COMPLETED",
+    "winnerId": "p0",
+    "economy": {
+      "totalBalance": 34740,
+      "propertyCount": 4,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 34740,
+          "properties": 4,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 0,
+          "properties": 0,
+          "bankrupt": true
+        }
+      ]
+    }
+  },
+  "surrender-ends-match": {
+    "stateHash": "7a5e841e517bd25611599619275c92e15b11ec243ebdfb8884c8e70c0d9c0c96",
+    "eventsHash": "124da079feb15ba159cd4df8d29b2657f5964374881630be7e69e21cd272eec6",
+    "oracleHash": "d54b0dd4b6653f35c812bbc40464d709bf014bdf04f442ff719e1dac3b0cf5c1",
+    "commands": 2,
+    "events": 3,
+    "turns": 0,
+    "status": "COMPLETED",
+    "winnerId": "p0",
+    "economy": {
+      "totalBalance": 40000,
+      "propertyCount": 0,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 40000,
+          "properties": 0,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 0,
+          "properties": 0,
+          "bankrupt": true
+        }
+      ]
+    }
+  },
+  "auction-multi-bidder": {
+    "stateHash": "d4e379cfb35fe55355f06d019fd5ddf83bda233f16c3e9c4a19cb05282789ad7",
+    "eventsHash": "8666eb3f89a7813642bc7125f1ebcfdff451ef972cad781f49758a58ed1fed8c",
+    "oracleHash": "e121d57358cd84a1ecc09076edbdbf64648485cffa0a63303955859202ad47ff",
+    "commands": 236,
+    "events": 433,
+    "turns": 91,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 117675,
+      "propertyCount": 27,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 26370,
+          "properties": 7,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 26560,
+          "properties": 7,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 38150,
+          "properties": 7,
+          "bankrupt": false
+        },
+        {
+          "id": "p3",
+          "balance": 26595,
+          "properties": 6,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "long-match-grind": {
+    "stateHash": "83d1f981ceb912a0699a5ed2dbcd2587ef548fa9342fe1120fc3895068b71a9c",
+    "eventsHash": "d9d1f42e0b455f2740744fb6d1bdc4045e7bff9b171bf42da1e90567059d3d08",
+    "oracleHash": "f8c195bd7fffb2725d1c60b29897c669b9e9879c80f07f7a77a434d7763a29ef",
+    "commands": 438,
+    "events": 807,
+    "turns": 166,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 117750,
+      "propertyCount": 29,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 34225,
+          "properties": 5,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 26285,
+          "properties": 5,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 27055,
+          "properties": 12,
+          "bankrupt": false
+        },
+        {
+          "id": "p3",
+          "balance": 30185,
+          "properties": 7,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "tax-and-luxury": {
+    "stateHash": "fa41679a33e2bb0fed9db4047800af83f884bd86d5bc94828b640ad46be8e2b6",
+    "eventsHash": "38b609217d8912c501538abe1ce07fa22c1da9c113e5e383b26cade85562fd77",
+    "oracleHash": "a8dc0d9e0528a8bcd3c0c57abb4f1497f51086a969c207ab5aefbd0d90b3adc7",
+    "commands": 242,
+    "events": 438,
+    "turns": 86,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 48400,
+      "propertyCount": 28,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 17155,
+          "properties": 8,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 15520,
+          "properties": 12,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 15725,
+          "properties": 8,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "cards-drawn": {
+    "stateHash": "2a990ef7682e5be4474efc6d8e459fdf2bb018b46bcdc4d55e66fabeed3c1902",
+    "eventsHash": "6d9d639625d392b91811a0273b3cc592bb7b4b5de2bc309e9cd91fecf2ac6de5",
+    "oracleHash": "c2493dab3fe6631e17e7e038acb1e5f631b3e3c9ab9d78d1afaa490189c523b9",
+    "commands": 334,
+    "events": 608,
+    "turns": 134,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 46200,
+      "propertyCount": 29,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 16555,
+          "properties": 8,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 8490,
+          "properties": 12,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 21155,
+          "properties": 9,
+          "bankrupt": false
+        }
+      ]
+    }
+  },
+  "all-tiles-granted-monopoly-rent": {
+    "stateHash": "ffca45b977a6b519c682df2e95ba5f7dccb718246aed52a4cfd00b710b1a5760",
+    "eventsHash": "f374868bea7373b9ed3489efc06175dff678c0899dbed850bab187f14485dd05",
+    "oracleHash": "074dd39018ef83e75fdb36321db8a63241d37c1b4e987ad0a15ca7581f0c7c72",
+    "commands": 4,
+    "events": 7,
+    "turns": 1,
+    "status": "ACTIVE",
+    "winnerId": null,
+    "economy": {
+      "totalBalance": 90000,
+      "propertyCount": 3,
+      "developedCount": 0,
+      "mortgagedCount": 0,
+      "perPlayer": [
+        {
+          "id": "p0",
+          "balance": 30100,
+          "properties": 3,
+          "bankrupt": false
+        },
+        {
+          "id": "p1",
+          "balance": 29900,
+          "properties": 0,
+          "bankrupt": false
+        },
+        {
+          "id": "p2",
+          "balance": 30000,
+          "properties": 0,
+          "bankrupt": false
+        }
+      ]
+    }
+  }
+}
