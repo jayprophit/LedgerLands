@@ -11,6 +11,7 @@ import type {
 import { DEFAULT_BOARD, DETENTION_INDEX } from "./board.js";
 import { drawCardIndex, SIGNAL_DECK } from "./cards.js";
 import { getRuleset, type Ruleset } from "./rules.js";
+import { cloneMatchState, type MatchStateCloner } from "./clone.js";
 
 export interface EngineOptions {
   board?: readonly BoardTile[];
@@ -409,10 +410,14 @@ export function applyCommand(
   original: MatchState,
   command: GameCommand,
   engineOptions?: EngineOptions,
+  clone: MatchStateCloner = cloneMatchState,
 ): MatchState {
   const options = { ...DEFAULT_OPTIONS, ...engineOptions };
   const board = options.board;
-  const state = structuredClone(original) as MatchState;
+  // See src/clone.ts: only the containers a command can mutate are copied, and
+  // the append-only event log is shared by pointer. Equivalence with the
+  // previous structuredClone behaviour is proved in test/clone-equivalence.ts.
+  const state = clone(original);
   if (!state.trades) state.trades = [];
   if (state.deckCursor === undefined) state.deckCursor = 0;
   if (!state.rulesetVersion) state.rulesetVersion = options.rulesetVersion;
