@@ -3,6 +3,7 @@ import {
   applyCommand,
   createMatchState,
   replayCommands,
+  TEAM_2V2_RULES,
   TEAM_2V2_V1,
   normalizeSeat,
   areTeammates,
@@ -12,7 +13,7 @@ import {
   teamIdOf,
   validateTeams,
 } from "../src/index.js";
-import { TEAM_2V2_RULES, type MatchState, type PlayerId, type TeamState } from "@ledgerlands/shared-types";
+import type { MatchState, PlayerId, TeamState } from "@ledgerlands/shared-types";
 import { FixtureDriver } from "./oracle/driver.js";
 import { checkInvariants } from "./oracle/invariants.js";
 import { eventsHash, stateHash } from "./oracle/canonical.js";

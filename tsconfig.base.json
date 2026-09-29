@@ -13,6 +13,14 @@
     "declaration": true,
     "sourceMap": true,
     "baseUrl": ".",
+    // WARNING — these paths point at DECLARATION files, which have no runtime
+    // exports. They are fine for type-only imports (erased at compile time) and
+    // actively break value imports: `tsx` honours these paths, so a runtime
+    // `import { SOME_VALUE } from "@ledgerlands/shared-types"` resolves to a .d.ts
+    // and fails with "does not provide an export named". That is exactly what
+    // TEAM_2V2_RULES hit; it lives in game-engine/src/rules.ts for that reason.
+    // If you need a shared runtime value, add an `exports`/subpath entry to the
+    // package and import it by that subpath, do not extend these mappings.
     "paths": {
       "@ledgerlands/shared-types": [
         "packages/shared-types/dist/index.d.ts"
@@ -23,6 +31,5 @@
       "@ledgerlands/aetherius-sdk": [
         "packages/aetherius-sdk/dist/index.d.ts"
       ]
-    }
-  }
+    }  }
 }

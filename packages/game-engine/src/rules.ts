@@ -1,4 +1,27 @@
-import { TEAM_2V2_RULES, type RulesetVersion, type TeamRules } from "@ledgerlands/shared-types";
+import type { RulesetVersion, TeamRules } from "@ledgerlands/shared-types";
+
+/**
+ * The 2v2 rule set, as a runtime value.
+ *
+ * It lives here rather than in `shared-types` because this package's tsconfig
+ * path maps point at `.d.ts` files, which have no runtime exports — importing a
+ * value from another package at runtime resolves to a declaration file and
+ * throws. Types cross the boundary fine because they are erased. See the warning
+ * in `tsconfig.base.json`.
+ *
+ * Exported so tests and callers can assert the rule set without re-deriving it.
+ */
+export const TEAM_2V2_RULES: TeamRules = {
+  economy: "INDIVIDUAL",
+  propertyOwnership: "INDIVIDUAL",
+  teammateRent: "EXEMPT",
+  bankruptcy: "INDIVIDUAL",
+  elimination: "ALL_MEMBERS",
+  victory: "LAST_SOLVENT_TEAM",
+  auctionParticipation: "INDIVIDUAL",
+  teammateTrading: "ALLOWED",
+  startingBalance: "STANDARD_PER_PLAYER",
+};
 
 /** Versioned economic rules. All sat amounts are integer practice units (simulated sats). */
 export interface Ruleset {

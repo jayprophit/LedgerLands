@@ -87,6 +87,11 @@ export interface TeamState {
  * conditionals. Every field is a decision, not a default: a future variant
  * (shared treasury, shared property, team loans) is a different value here, not
  * a different engine.
+ *
+ * TYPES ONLY. The corresponding runtime value lives in
+ * `packages/game-engine/src/rules.ts` (`TEAM_2V2_RULES`) because this package's
+ * tsconfig path maps resolve to a `.d.ts`, which has no runtime exports. See the
+ * warning in `tsconfig.base.json`.
  */
 export interface TeamRules {
   /** Wallets are never pooled. */
@@ -108,19 +113,6 @@ export interface TeamRules {
   /** Each player starts with the full standard ruleset balance. */
   startingBalance: "STANDARD_PER_PLAYER";
 }
-
-export const TEAM_2V2_RULES: TeamRules = {
-  economy: "INDIVIDUAL",
-  propertyOwnership: "INDIVIDUAL",
-  teammateRent: "EXEMPT",
-  bankruptcy: "INDIVIDUAL",
-  elimination: "ALL_MEMBERS",
-  victory: "LAST_SOLVENT_TEAM",
-  auctionParticipation: "INDIVIDUAL",
-  teammateTrading: "ALLOWED",
-  startingBalance: "STANDARD_PER_PLAYER",
-};
-
 export interface AuctionBid {
   playerId: PlayerId;
   amount: number;
