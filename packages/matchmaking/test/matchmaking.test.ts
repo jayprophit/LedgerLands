@@ -50,6 +50,16 @@ describe("matchmaking", () => {
 
   it("refuses unsupported queues", () => {
     const mm = new MatchmakingService();
-    expect(() => mm.join({ playerId: "a", displayName: "A", queue: "TEAM_2V2", rating: 1500 }, T0)).toThrow(/QUEUE_NOT_SUPPORTED/);
+    // TEAM_2V2 is now supported; TOURNAMENT is served by TournamentService.
+    expect(() => mm.join({ playerId: "a", displayName: "A", queue: "TOURNAMENT", rating: 1500 }, T0)).toThrow(
+      /QUEUE_NOT_SUPPORTED/,
+    );
+  });
+
+  it("accepts every supported queue, including TEAM_2V2", () => {
+    const mm = new MatchmakingService();
+    for (const queue of ["CASUAL_1V1", "RANKED_1V1", "FFA_4", "TEAM_2V2"] as const) {
+      expect(() => mm.join({ playerId: `p-${queue}`, displayName: queue, queue, rating: 1500 }, T0)).not.toThrow();
+    }
   });
 });

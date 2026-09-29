@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { DEFAULT_SKILL_BANDS, MatchmakingError, type QueueName, type SkillBandConfig } from "./service.js";
+import {
+  DEFAULT_SKILL_BANDS,
+  MatchmakingError,
+  SUPPORTED_QUEUES,
+  type QueueName,
+  type SkillBandConfig,
+} from "./service.js";
 import type { MatchmakingStore, QueueRow } from "./store-types.js";
 
 /**
@@ -46,7 +52,36 @@ export type MatchFactory = (params: {
   reservationId: string;
   playerIds: string[];
   queue: QueueName;
+  /**
+   * Team assignment for `TEAM_2V2`, already in seat order. Each entry's members
+   * are the players that must sit together on one team; the engine seats them
+   * alternating, so this is membership, not turn order. Empty for every other
+   * queue — a 1v1 or FFA match has no teams, and passing an empty list keeps
+   * that explicit rather than implied.
+   */
+  teams?: Array<{ teamId: string; memberIds: string[] }>;
 }) => Promise<string>;
+
+/** Queues a single tick will form groups for. */
+const TICK_QUEUES: QueueName[] = ["CASUAL_1V1", "RANKED_1V1", "FFA_4", "TEAM_2V2"];
+
+/**
+ * Split a 4-player group into two teams, deterministically.
+ *
+ * The group arrives in rating-compatible order. Taking alternating entries as
+ * the first member of each team means the strongest two candidates end up on
+ * OPPOSING teams, which is the fairer default when no party is queued. The
+ * engine then seats A1 B1 A2 B2, so no two consecutive turns belong to a team.
+ */
+export function formTwoVTwoTeams(playerIds: string[]): Array<{ teamId: string; memberIds: string[] }> {
+  if (playerIds.length !== 4) {
+    throw new MatchmakingError("INVALID_GROUP_SIZE", `TEAM_2V2 needs 4 players, got ${playerIds.length}.`);
+  }
+  return [
+    { teamId: "red", memberIds: [playerIds[0]!, playerIds[2]!] },
+    { teamId: "blue", memberIds: [playerIds[1]!, playerIds[3]!] },
+  ];
+}
 
 const QUEUE_SIZES: Record<QueueName, number> = {
   CASUAL_1V1: 2,
@@ -64,6 +99,12 @@ export class DurableMatchmakingService {
 
   /** Idempotent: a player already queued in this queue is returned unchanged. */
   async join(input: { playerId: string; displayName: string; queue: QueueName; rating: number; nowMs?: number }): Promise<QueueRow> {
+    // The durable path used to skip this check while the in-process service
+    // enforced it, so an unsupported queue (TOURNAMENT) could be joined and then
+    // silently never matched by any tick, stranding the player.
+    if (!SUPPORTED_QUEUES.includes(input.queue)) {
+      throw new MatchmakingError("QUEUE_NOT_SUPPORTED", `${input.queue} is not a matchmaking queue.`);
+    }
     const { row } = await this.store.join({ ...input, nowMs: input.nowMs ?? Date.now() });
     return row;
   }
@@ -88,7 +129,7 @@ export class DurableMatchmakingService {
     await this.store.sweepExpiredReservations(nowMs);
 
     const assignments: Assignment[] = [];
-    for (const queue of ["CASUAL_1V1", "RANKED_1V1", "FFA_4"] as QueueName[]) {
+    for (const queue of TICK_QUEUES) {
       // One consistent candidate snapshot per queue for this tick. The
       // compare-and-set claim is still what makes concurrent ticks safe; this
       // snapshot only decides which groups are *attempted*.
@@ -98,7 +139,9 @@ export class DurableMatchmakingService {
         const won = await this.store.claimReservations(group, reservationId, nowMs, this.config.reservationLeaseMs);
         if (!won) continue; // another worker claimed these players
         try {
-          const matchId = await createMatch({ reservationId, playerIds: group.map((g) => g.playerId), queue });
+          const playerIds = group.map((g) => g.playerId);
+          const teams = queue === "TEAM_2V2" ? formTwoVTwoTeams(playerIds) : [];
+          const matchId = await createMatch({ reservationId, playerIds, queue, teams });
           const rows = await this.store.finalizeReservation(reservationId, matchId, nowMs);
           assignments.push({ reservationId, queue, playerIds: rows.map((r) => r.playerId), matchId });
         } catch {

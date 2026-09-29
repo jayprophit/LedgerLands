@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 
 export type QueueName = "CASUAL_1V1" | "RANKED_1V1" | "FFA_4" | "TEAM_2V2" | "TOURNAMENT";
 
-const SUPPORTED_QUEUES: QueueName[] = ["CASUAL_1V1", "RANKED_1V1", "FFA_4"];
+export const SUPPORTED_QUEUES: QueueName[] = ["CASUAL_1V1", "RANKED_1V1", "FFA_4", "TEAM_2V2"];
 
 export interface QueueEntry {
   playerId: string;
@@ -53,7 +53,7 @@ export class MatchmakingService {
   /** Idempotent join: same player+queue returns the existing entry. */
   join(entry: Omit<QueueEntry, "joinedAt">, nowMs = Date.now()): { entry: QueueEntry; position: number } {
     if (!SUPPORTED_QUEUES.includes(entry.queue)) {
-      throw new MatchmakingError("QUEUE_NOT_SUPPORTED", `${entry.queue} is reserved (2v2 needs team rules; tournament uses TournamentService).`);
+      throw new MatchmakingError("QUEUE_NOT_SUPPORTED", `${entry.queue} is reserved (tournament uses TournamentService).`);
     }
     const key = `${entry.queue}:${entry.playerId}`;
     const existing = this.entries.get(key);

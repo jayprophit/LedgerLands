@@ -217,19 +217,26 @@ function settleBankruptcy(state: MatchState, player: PlayerState, creditorId?: P
     pushEvent(state, { type: "AUCTION_COMPLETED", tileId });
   }
   pushEvent(state, { type: "PLAYER_BANKRUPT", playerId: player.id });
-  // D2: a team is eliminated only once EVERY member is out. One member going
-  // bankrupt leaves the team alive and its partner still playing.
-  const team = newlyEliminatedTeam(state);
-  if (team) {
-    team.eliminated = true;
-    team.eliminatedAtRevision = state.revision + 1;
-    pushEvent(state, { type: "TEAM_ELIMINATED", teamId: team.teamId });
-  }
+  markTeamEliminatedIfOut(state);
   maybeCompleteMatch(state);
 }
 
 function markBankruptIfNeeded(state: MatchState, player: PlayerState, creditorId?: PlayerId): void {
   settleBankruptcy(state, player, creditorId);
+}
+
+/**
+ * D2: a team is eliminated only once EVERY member is out. One member going
+ * bankrupt or surrendering leaves the team alive and its partner still playing.
+ *
+ * Shared by both elimination paths so they cannot drift apart.
+ */
+function markTeamEliminatedIfOut(state: MatchState): void {
+  const team = newlyEliminatedTeam(state);
+  if (!team) return;
+  team.eliminated = true;
+  team.eliminatedAtRevision = state.revision + 1;
+  pushEvent(state, { type: "TEAM_ELIMINATED", teamId: team.teamId });
 }
 
 /**
@@ -943,6 +950,10 @@ export function applyCommand(
       }
     }
     pushEvent(state, { type: "PLAYER_SURRENDERED", playerId: player.id });
+    // Surrendering eliminates a player exactly as bankruptcy does, so the team
+    // check has to run here too. It used not to, which meant a team could lose
+    // both members by surrender and never be marked eliminated.
+    markTeamEliminatedIfOut(state);
     maybeCompleteMatch(state);
     return state;
   }

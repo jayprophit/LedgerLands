@@ -12,5 +12,9 @@
   },
   "devDependencies": {
     "vitest": "5.0.1"
+  },
+  "dependencies": {
+    "@ledgerlands/game-engine": "^0.1.0",
+    "@ledgerlands/shared-types": "^0.1.0"
   }
 }

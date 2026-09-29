@@ -29,6 +29,7 @@ export {
   DurableMatchmakingRunner,
   DurableMatchmakingService,
   DEFAULT_DURABLE_CONFIG,
+  formTwoVTwoTeams,
   type Assignment,
   type GameMode,
   type MatchFactory,

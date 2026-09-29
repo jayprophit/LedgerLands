@@ -1,0 +1,62 @@
+{
+  "gamesPerMode": 200,
+  "generatedAt": "2026-09-29T15:16:04.629Z",
+  "modes": {
+    "FFA_4": {
+      "mode": "FFA_4",
+      "games": 200,
+      "completionRate": 0.24,
+      "avgTurns": 229.4,
+      "medianTurns": 245,
+      "bankruptcies": 239,
+      "gamesWithBankruptcy": 116,
+      "bankruptsPerGame": 1.195,
+      "rentEvents": 23601,
+      "rentPerGame": 118,
+      "avgRent": 229,
+      "teammateRentExemptions": 0,
+      "exemptionsPerGame": 0,
+      "auctionsCompleted": 606,
+      "auctionBids": 597,
+      "bidsPerAuction": 0.99,
+      "tradesProposed": 0,
+      "cardsDrawn": 6656,
+      "avgTopHolderShare": 0.587,
+      "maxTopHolderShare": 1,
+      "avgTeamCashGap": null,
+      "winners": {
+        "p0": 17,
+        "p1": 10,
+        "p2": 12,
+        "p3": 9
+      }
+    },
+    "TEAM_2V2": {
+      "mode": "TEAM_2V2",
+      "games": 200,
+      "completionRate": 0.28,
+      "avgTurns": 226,
+      "medianTurns": 244,
+      "bankruptcies": 185,
+      "gamesWithBankruptcy": 120,
+      "bankruptsPerGame": 0.925,
+      "rentEvents": 15342,
+      "rentPerGame": 76.71,
+      "avgRent": 223,
+      "teammateRentExemptions": 8205,
+      "exemptionsPerGame": 41.02,
+      "auctionsCompleted": 622,
+      "auctionBids": 604,
+      "bidsPerAuction": 0.97,
+      "tradesProposed": 0,
+      "cardsDrawn": 6552,
+      "avgTopHolderShare": 0.522,
+      "maxTopHolderShare": 1,
+      "avgTeamCashGap": 11426,
+      "winners": {
+        "t1": 30,
+        "t0": 26
+      }
+    }
+  }
+}
