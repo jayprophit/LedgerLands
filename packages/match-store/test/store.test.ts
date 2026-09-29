@@ -70,6 +70,42 @@ describe("PersistentMatchStore", () => {
     expect(after.revision).toBeGreaterThan(match.revision);
   });
 
+  it("rebuilds long matches from snapshots and still matches full replay", async () => {
+    const store = new PersistentMatchStore(new MemoryBackend());
+    const { match } = await store.create({ playerName: "Snap", seed: 78, difficulty: "HARD" });
+    // Drive a long match so several snapshots are written.
+    for (let i = 0; i < 60; i += 1) {
+      const cur = await store.get(match.id);
+      if (!cur || cur.status !== "ACTIVE") break;
+      const p = cur.players[cur.currentPlayerIndex]!;
+      try {
+        await store.command(
+          match.id,
+          p.id,
+          cur.turnPhase === "ROLL" ? { type: "ROLL_DICE" } : { type: "END_TURN", playerId: p.id },
+          { commandId: `snap-${i}` },
+        );
+      } catch {
+        break;
+      }
+    }
+    const backend = (store as unknown as { backend: MemoryBackend }).backend;
+    const record = await backend.load(match.id);
+    if (!record) throw new Error("record missing");
+    expect(record.snapshots.length).toBeGreaterThan(0);
+    const expected = await store.get(match.id);
+    // Cache cleared: rebuild must go through the snapshot path and be identical.
+    (store as unknown as { states: Map<string, unknown> }).states.clear();
+    expect(await store.get(match.id)).toEqual(expected);
+
+    // Corrupting every snapshot must fall back to full replay, not break reads.
+    const corrupted = structuredClone(record);
+    for (const s of corrupted.snapshots) s.revision = 999_999;
+    const tampered = new PersistentMatchStore(new MemoryBackend());
+    await (tampered as unknown as { backend: MemoryBackend }).backend.save(match.id, corrupted);
+    expect(await tampered.get(match.id)).toEqual(expected);
+  });
+
   it("sweeps stale lobbies and exports signed replays", async () => {
     const store = new PersistentMatchStore(new MemoryBackend());
     const { match } = await store.create({ playerName: "Host", seed: 55, solo: false });

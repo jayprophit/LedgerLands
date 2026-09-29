@@ -12,6 +12,7 @@ import { chooseAiCommand, difficultyFromString, type Difficulty } from "@ledgerl
 import {
   FileBackend,
   MemoryBackend,
+  type MatchSnapshot,
   type PersistedCommand,
   type StorageBackend,
   type StoredMatch,
@@ -49,6 +50,33 @@ export interface ReplayExport {
 }
 
 const SNAPSHOT_EVERY_COMMANDS = 25;
+
+/**
+ * Newest snapshot whose recorded revision actually exists in the command log.
+ * A snapshot ahead of the log (truncated write, lost row) is unusable.
+ */
+function latestUsableSnapshot(stored: StoredMatch): MatchSnapshot | undefined {
+  const revs = new Set(stored.commands.map((c) => c.resultRevision ?? 0));
+  return [...stored.snapshots]
+    .filter((s) => revs.has(s.revision))
+    .sort((a, b) => b.revision - a.revision)[0];
+}
+
+/**
+ * A snapshot at `revision` may only be used when the log is gap-free up to it:
+ * command result revisions must be strictly increasing with no duplicates.
+ * That guarantees "snapshot + tail" == "full replay".
+ */
+function commandsConsistentUpTo(commands: readonly PersistedCommand[], revision: number): boolean {
+  let prev = -1;
+  for (const c of commands) {
+    const r = c.resultRevision ?? 0;
+    if (r <= prev) return false;
+    prev = r;
+    if (r >= revision) return true;
+  }
+  return false;
+}
 
 export function chainHashForEvents(events: MatchState["log"]): string {
   let prev = "GENESIS";
@@ -263,16 +291,33 @@ export class PersistentMatchStore {
     return rebuilt;
   }
 
-  /** Deterministic rebuild: initial + persisted commands, then corrections. */
+  /**
+   * Deterministic rebuild: latest usable snapshot + its command tail, then
+   * corrections. Snapshots are advisory caches — a stale, corrupt, or
+   * gap-inconsistent snapshot falls back to a full replay rather than
+   * failing the read, so this can only ever be faster, never wrong.
+   */
   async rebuild(matchId: string): Promise<MatchState | undefined> {
     const stored = await this.backend.load(matchId);
     if (!stored) return undefined;
-    let state = replayCommands(structuredClone(stored.initial), stored.commands.map((c) => c.command));
+    let state = this.replayFrom(stored);
     if (stored.corrections.some((c) => c.kind === "CANCEL_LOBBY_TIMEOUT")) {
       state = { ...state, status: "CANCELLED" };
     }
     this.states.set(matchId, state);
     return state;
+  }
+
+  /** Snapshot + tail replay with a full-replay fallback. */
+  private replayFrom(stored: StoredMatch): MatchState {
+    const snapshot = latestUsableSnapshot(stored);
+    if (snapshot && commandsConsistentUpTo(stored.commands, snapshot.revision)) {
+      const tail = stored.commands
+        .filter((c) => (c.resultRevision ?? 0) > snapshot.revision)
+        .map((c) => c.command);
+      return replayCommands(structuredClone(snapshot.state), tail);
+    }
+    return replayCommands(structuredClone(stored.initial), stored.commands.map((c) => c.command));
   }
 
   private applyAndPersist(

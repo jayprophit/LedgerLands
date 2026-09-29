@@ -42,7 +42,7 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 - [x] Add reconnect/resume tokens and state snapshots (+ events-since sync).
 - [x] Add match timeouts (lobby sweep) and surrender/disconnect rules.
 - [x] Add persistence integration tests (rebuild, idempotency, stale-state, replay hash, snapshot-vs-full-replay).
-- [ ] Use stored snapshots to shorten rebuild (perf risk 3 in docs/PERFORMANCE.md).
+- [x] Use stored snapshots to shorten rebuild (guarded; equal to full replay).
 
 ## LL-P3 — Complete property-trading rules
 

@@ -99,20 +99,30 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **104 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
-Breakdown: engine 27 · match-store 12 · api 11 · ranked 4 · tournaments 21 ·
+Totals: **105 tests PASS** (1 skipped: live-PG gate) + **3/3 E2E**.
+Breakdown: engine 27 · match-store 13 · api 11 · ranked 4 · tournaments 21 ·
 ledger 3 · ai 3 · auth 3 · matchmaking 5 · marketplace 3.
+
+### LL-P17 performance (applied this pass)
+
+- `rebuild()` now uses the newest *usable* snapshot + command tail instead of
+  replaying from `initial`. Guarded by `commandsConsistentUpTo()` so the result
+  is provably identical to full replay; corrupt/stale/ahead-of-log snapshots
+  fall back automatically. Test: snapshot rebuild == expected, and corrupting
+  every snapshot still returns the same state.
+- `MemoryBackend.save` no longer deep-clones the record per command
+  (reads still clone). Match play 142 s → 93 s for 50 games.
 
 ## Known issues (current)
 
 1. **Live PostgreSQL verification BLOCKED** — no service reachable here.
    `PostgresBackend` is unit-tested against a constraint-faithful fake; enabling
    the real path is documented in `docs/audit/THIRD_PASS_CHECKPOINT.md`.
-2. **Snapshots are written but not consumed** — `rebuild()` always replays from
-   `initial`, so long matches pay O(commands) on every cache miss. Biggest
-   available performance win (`docs/PERFORMANCE.md` risk 3).
-3. **Write-through clone per command** — ~2.8 s/game locally; fixed by the
-   append-only Postgres path.
+2. **Snapshot-accelerated rebuild is in place**, but the record read is still
+   O(commands) per rebuild; a partial/suffix read is the next step.
+3. **Per-command cost remains ~1.9 s/game locally**, dominated by the engine's
+   pure `applyCommand` clone + bot decisioning. The `PostgresBackend` avoids
+   the store-side cost by writing one row per command.
 4. Replay export is **tamper-evident, not signed**; no dispute workflow
    service yet (`docs/REPLAY.md`).
 5. Matchmaking is O(n²) in queue length; fine for hundreds, not thousands.

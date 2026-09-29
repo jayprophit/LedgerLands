@@ -46,10 +46,16 @@ export interface StorageBackend {
   list(): Promise<string[]>;
 }
 
+/**
+ * Development backend. `save` keeps the caller's record by reference instead of
+ * deep-cloning on every command (that clone was the dominant cost of match
+ * play, O(commands²)). Reads still deep-clone, so callers can never mutate
+ * stored state by accident. Not durable and not multi-process safe.
+ */
 export class MemoryBackend implements StorageBackend {
   private readonly data = new Map<string, StoredMatch>();
   async save(matchId: string, record: StoredMatch): Promise<void> {
-    this.data.set(matchId, structuredClone(record));
+    this.data.set(matchId, record);
   }
   async load(matchId: string): Promise<StoredMatch | undefined> {
     const r = this.data.get(matchId);
