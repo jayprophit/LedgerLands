@@ -1,133 +1,142 @@
 # Design: 2v2 team play
 
-Status: **PROPOSED — awaiting owner decision.** No engine code has been
-changed. This document exists because the team model changes the economics, the
-win condition, and the ruleset version, and those are product decisions, not
-implementation details.
+Status: **OWNER-RESOLVED AND IMPLEMENTED.** D1–D5 were decided by the owner and
+shipped as ruleset `team-v1`. This document is now the record of what was
+decided and why, not a list of open questions. Simulation evidence lives in
+[`docs/simulation/TEAM_2V2_BASELINE.md`](../simulation/TEAM_2V2_BASELINE.md).
 
-## Why this cannot be bolted on
+Implementation: `packages/game-engine/src/teams.ts` (the rules),
+`packages/game-engine/src/rules.ts` (`team-v1`), `test/teams.test.ts` (matrix).
 
-`packages/game-engine` currently assumes one thing about players everywhere:
+## The principle everything follows from
 
-- `PlayerState.ownerId` is a `PlayerId` (`packages/shared-types/src/index.ts:43`)
-- `MatchState.players` is a flat `PlayerState[]`; the turn is
-  `currentPlayerIndex` into that array (`engine.ts:363`)
-- bankruptcy and the win condition are per-player: a match ends when
-  `active.length <= 1` (`engine.ts:357`)
-- the engine hard-rejects anything other than 1–4 players (`engine.ts:54`)
+**A player owns the economy. A team owns the victory.**
 
-Team play touches all four. Every one of those is used by auctions, trades,
-rent, mortgages, and the replay hash chain, so a partial change would produce
-matches that replay inconsistently. The ruleset must be a new version
-(`team-v1`), not a variant of `classic-v1`, so old replays keep replaying
-identically.
-
-## Open decisions
-
-These are the questions that must be answered before implementation. Each has a
-recommendation, and the recommendation is not a decision.
-
-### D1. Rent and tax attribution
-
-A team collects rent from a team-monopoly tile. Who is credited?
-
-- (a) the **team pool** — a shared team balance, spent by either member.
-- (b) the **landlord's opponent** — credited to the *player* who lands, so a
-  team-mate can never be enriched by a good roll.
-- (c) **split** evenly across the whole team.
-
-Recommendation: **(b)**. A shared pool is the single most likely source of
-partner-abuse exploits: one member spends money the other earned, and a
-dispute about it is unresolvable from the event log alone. (b) keeps every
-ledger line attributable to one `playerId`, which the existing double-entry
-journal and the trade/auction validation already assume.
-
-### D2. Team bankruptcy
-
-If one member goes bankrupt, what happens?
-
-- (a) team is eliminated;
-- (b) the member is replaced by a bot and the team continues;
-- (c) the team continues with a reduced roster (no replacement).
-
-Recommendation: **(a)**, elimination, with the *other* team's members still
-required to be active for the match to end. Rationale: (b) and (c) both need a
-roster-mutation path inside the event-sourced turn loop, which means an
-insertion into `MatchState.players` and a re-index of `currentPlayerIndex` — a
-replay-divergence risk for very little gameplay value in a play-money game.
-
-### D3. Winning
-
-- (a) **last team standing** (both opponents eliminated);
-- (b) **net worth at a turn limit**;
-- (c) both.
-
-Recommendation: **(a)** as the primary, with (b) only as a tiebreak when a turn
-limit is configured. A turn limit is a safety valve for stalls, not a scoring
-mode; making it a scoring mode means the interesting play is "stall until turn
-N", which is a worse game than the one being designed.
-
-### D4. Bids, trades, and mortgages
-
-Can a team bid on an auction, or is that individual-only?
-
-Recommendation: **individual-only, first version.** Teammate collusion at an
-auction is trivially exploitable (bid for a property your partner will not pay
-for, to deny the other team), and the anti-collusion analysis is a project in
-itself. A team that wants a property buys it or trades for it.
-
-### D5. Starting balances
-
-- (a) same per player (4 × 15000 = 60000 total);
-- (b) scaled down per player so the *team* total matches a 2-player game
-  (4 × 7500).
-
-Recommendation: **(a)** for the first implementation, and document the
-divergence. Teams are stronger than individuals (rent income is collected
-faster with four pieces on the board), so the balance is the tuning knob, not
-the starting balance. Lowering it makes a 2v2 match feel punishing without
-fixing anything. Revisit once win-rate data exists.
-
-## Recommended shape if approved
-
+```text
+Player                    Team
+├── wallet/balance         ├── teamId
+├── properties             ├── member player ids
+├── mortgages              ├── eliminated state
+├── developments           └── victory relationship
+├── jail state
+├── bankruptcy state
+└── turn state
 ```
-interface TeamState {
-  id: TeamId;
-  memberIds: [PlayerId, PlayerId];
+
+No shared wallet. No shared property. There is no code path that could pool
+either, and tests assert that a teammate cannot mortgage, develop, or buy
+something the partner owns.
+
+## Resolved decisions
+
+### D1 — Rent attribution: individual ownership, teammate rent exempt
+
+Property belongs to the individual player who owns it. An opponent landing on it
+pays the owner in full. A teammate landing on it pays **nothing**, and the
+exemption is recorded as a `TEAMMATE_RENT_EXEMPT` event.
+
+Rationale: silently skipping the transfer would make a no-op indistinguishable
+from a bug in an audit trail, and a dispute about who owes what has to be
+answerable from the event log alone.
+
+### D2 — Bankruptcy: individual, creditor-aware
+
+A player can go bankrupt without eliminating their team. Assets resolve under the
+existing creditor-aware rules: the estate goes to the creditor that was owed, or
+returns to the bank if there is none. **A bankrupt player's estate never goes to
+their teammate.**
+
+The team is eliminated only when every member is out. Both elimination paths
+(bankruptcy and surrender) share one helper so they cannot drift apart.
+
+### D3 — Victory: last solvent team
+
+A team wins when every player on every opposing team is eliminated. A1 bankrupt
+with A2 active leaves Team A alive. Both out eliminates it.
+
+No timed or score-based victory is implemented. If one is added it needs its own
+ruleset version rather than an implicit fallback.
+
+### D4 — Auctions and trades: individual participation, normal commands
+
+Everyone, teammates included, bids and settles as themselves. Teammates may
+trade, through the ordinary propose → validate → accept path. There is no direct
+asset-gifting command and no privileged team-transfer endpoint, so every
+transaction is recorded for replay and audit.
+
+No anti-collusion rules are implemented. Inventing them without evidence would be
+guesswork; the simulation baseline is the evidence that should drive them.
+
+### D5 — Starting balance: full standard balance per player
+
+Each of the four players starts with the full ruleset balance. 2v2 therefore
+begins as **four individual players with two victory teams** — deliberately, and
+deliberately *not* claimed to be balanced.
+
+## The rule set is explicit, not scattered
+
+```ts
+// team-v1
+teamRules: {
+  economy: "INDIVIDUAL",
+  propertyOwnership: "INDIVIDUAL",
+  teammateRent: "EXEMPT",
+  bankruptcy: "INDIVIDUAL",
+  elimination: "ALL_MEMBERS",
+  victory: "LAST_SOLVENT_TEAM",
+  auctionParticipation: "INDIVIDUAL",
+  teammateTrading: "ALLOWED",
+  startingBalance: "STANDARD_PER_PLAYER",
 }
-
-MatchState.teams?: TeamState[];         // absent for 1–4 individual play
-Ruleset.version: "team-v1";
 ```
 
-- A match with `teams` is either 2v2 (4 players) or **1v1** (2 players), so the
-  team code path is exercised by a two-player match and does not need four
-  humans to test.
-- `PlayerState` is unchanged. Teams are an overlay, not a replacement — this
-  keeps 1–4 individual play, ranked, and every existing replay valid.
-- Team rules are resolved through a single pure function
-  (`teamOf(playerId, match)`, `isOpposingTeam(a, b, match)`) so no rent or
-  auction path grows a conditional of its own.
+Its **absence** from every other ruleset is the switch. A match with no `teams`
+cannot trigger a team rule, which is why all 19 oracle goldens and the
+clone-equivalence suite were unaffected by this work.
 
-## Sequencing
+## Seating
 
-1. Owner answers D1–D5. Nothing is implemented before that.
-2. `team-v1` ruleset + `teams` on `MatchState`, behind the same engine.
-3. `isOpposingTeam` gate in rent, auctions, and trades; D4 if individual-only.
-4. Team-aware win condition (D3) and elimination (D2).
-5. Tests first: team rent attribution, team elimination, cross-team trade
-   refusal, and a **replay determinism test** that a seeded 2v2 match replays
-   to an identical state hash.
-6. Playwright: a bot-only 2v2 match end to end.
+Alternating by team: **A1 B1 A2 B2**, not A1 A2 B1 B2. Fewer consecutive
+teammate turns, and a cleaner competitive baseline. The seat order is
+authoritative state (the `players` array), not a presentation concern, and
+`validateTeams` refuses a roster that would place teammates adjacently.
 
-## Cost, stated honestly
+Matchmaking splits a matched group deterministically, taking alternating entries
+so the two highest-rated candidates face each other. Party play (queueing with a
+specific partner) is not implemented.
 
-This is a larger change than the marketplace extension. It touches the engine's
-central state shape, the win condition, the rent path, and the ruleset registry,
-and it needs its own determinism proof. The live-PostgreSQL gate is still open
-and unrelated to it, so this does not unblock anything else.
+## Downstream
 
-The cheaper alternative, if 2v2 is a nice-to-have rather than a requirement: keep
-individual play as the shipped mode and treat teams as a future ruleset
-(`team-v1`) once the persistence layer is verified against a live database.
-That ordering gets both, in the order that de-risks more per unit of work.
+- **Ranked:** a team win converts to four individual results, one per member.
+  Not a shared pool, not half the delta — both are defensible with no evidence
+  behind them, and a pool would make teammates indistinguishable in a
+  leaderboard. An eliminated player keeps a blank rating.
+- **Matchmaking:** `TEAM_2V2` forms groups of four and passes `teams` to the
+  match factory. `MatchFactory` receives `teams: []` for every other queue, so a
+  1v1 cannot be mistaken for a team match.
+- **Tournaments:** not integrated. A bracket round assumes one match per pair of
+  participants; a 2v2 round is four participants with a team result. This needs
+  its own format rather than a reuse of the existing one.
+
+## Preserved for later, not implemented
+
+`SHARED_TREASURY`, `SHARED_PROPERTY`, `TEAM_LOANS`, `TEAM_ASSIST`,
+`TEAM_BUILDING`. Each is a new value of a `TeamRules` field, not a new engine
+branch. The first implementation remains individual economy plus shared victory.
+
+## Known gaps
+
+1. **No party/duo queueing.** Teams are formed by the matcher, not chosen.
+2. **No rating band for `TEAM_2V2`.** `compatible()` applies skill bands to
+   `RANKED_1V1` only, so four players of any rating can be grouped. A ranked 2v2
+   needs its own queue; this should not be changed silently.
+3. **Bots do not trade, and auctions are near-degenerate** (≈1.0 bids per
+   auction). D4's teammate-trade and teammate-auction decisions are covered by
+   unit tests but **not** by simulation. Adding bot trading is the highest-value
+   next simulation work.
+4. **No tournament format for team rounds.**
+5. **Balance is a baseline, not a result.** 200 paired games per mode. The
+   measured effect of teammate rent immunity is a ~35% drop in rent events per
+   game and a ~23% drop in bankruptcies per game. Nothing has been tuned in
+   response, and nothing should be until the bot trade and auction gaps are
+   closed.

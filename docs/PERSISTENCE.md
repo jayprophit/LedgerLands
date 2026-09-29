@@ -59,7 +59,12 @@ contract as the unit tests, but against **PGlite** — PostgreSQL compiled to
 WASM, so the real planner and the real constraint enforcement are involved.
 The DDL in `test/ddl.ts` mirrors `prisma/schema.prisma` by hand.
 
-What this proves:
+Status labels, used consistently across the docs:
+
+- `POSTGRES_SEMANTICS_VERIFIED_PGLITE` — what the harness proves.
+- `NETWORKED_POSTGRES_VERIFIED` — **not claimed.** Requires a real server.
+
+What the harness proves:
 
 - the SQL is valid and the schema matches the Prisma model;
 - state is stored as `jsonb`, not a double-encoded string;
@@ -79,16 +84,29 @@ the interleaving itself still needs a networked server to observe.
 
 ### The bug this found
 
-`snapshot.seq` is the **count** of commands a snapshot covers, and commands are
-stored zero-indexed (`seq = 0..n-1`), so the first command after a snapshot sits
-at `seq === snapshot.seq`. The range query used `seq > snapshot.seq`, which
-skipped that row. The caller's gap-free check then failed and every
-snapshot-backed rebuild silently fell back to full replay — correct results, no
-performance benefit, no error. `MemoryBackend` ignores `afterSeq` and filters by
-revision, so no existing test could see it.
+`docs/adr/ADR-002-postgres-snapshot-off-by-one.md` has the full account. In
+short: `snapshot.seq` is the *count* of commands a snapshot covers while stored
+commands are *zero-indexed*, so the first command after a snapshot sits at
+`seq === snapshot.seq` and the range bound was one too high. The suffix came back
+short, the caller's gap-free check failed, and every snapshot-backed rebuild
+silently degraded to a full replay — correct results, no error, no benefit.
+`MemoryBackend` ignores `afterSeq` entirely, so no test could see it.
 
-Fixed in `postgres.ts` (`gtSeq: afterSeq - 1`) with a regression test that
-asserts `lastRebuild.path === "suffix"`.
+### The `afterSeq` contract, per backend
+
+They are **not** uniform, and pretending otherwise would hide the same class of
+bug again:
+
+| Backend | Honours `afterSeq`? | Filters by |
+|---|---|---|
+| `MemoryBackend` | no | `afterRevision` |
+| `FileBackend` | no | `afterRevision` |
+| `PostgresBackend` | **yes** — `seq > afterSeq - 1` | both |
+
+They must still agree on the *logical* suffix when called the way
+`rebuildFromSuffix` calls them, with both bounds derived from one snapshot.
+`snapshot-boundary.test.ts` asserts exactly that, and also asserts each backend's
+actual behaviour, including that memory and file ignore the bound.
 
 ## Reconstruction
 

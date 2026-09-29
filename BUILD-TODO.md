@@ -64,11 +64,19 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 ## LL-P4 — Accounts / Aetherius Identity
 
 - [ ] Integrate Aetherius Identity/Profile when launched in Aetherius.
-- [ ] Standalone development auth adapter.
-- [ ] Session/device management.
-- [ ] Passkey/WebAuthn/MFA interfaces.
+- [x] Standalone development auth adapter (`DevAuthAdapter`) — dev-only, and the
+      `ProductionGuard` refuses to serve it in a production profile.
+- [ ] Session/device management. (Anti-replay session counters exist; there is
+      no device list, no revocation UI, and no refresh/rotation.)
+- [ ] Real provider integrations. Interfaces and inert/mock adapters exist for
+      Google, Apple, Aetherius, email, wallet and passkey; none is an integration.
+- [ ] Real MFA verification. `MfaService` tracks enrolled factors and single-use
+      backup codes, but there is no TOTP/WebAuthn verification ceremony.
+- [ ] KYC/age verification.
 - [ ] Profile, avatar/token selection and preferences.
-- [ ] Policy-gate privileged operations through Aetherius RBAC/ABAC.
+- [ ] Policy-gate privileged operations through Aetherius RBAC/ABAC. (The step-up
+      boundary exists server-side: a dev session can never satisfy a privileged
+      operation.)
 
 ## LL-P5 — Practice economy
 
@@ -84,8 +92,14 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 - [x] Glicko-2/Elo-style configurable rating service (Elo + placement window, packages/ranked).
 - [x] Ranked seasons (season-scoped ratings + leaderboard API + web tab).
-- [ ] Matchmaking queue and skill bands.
-- [ ] Anti-smurf/collusion signals.
+- [x] Matchmaking queue and skill bands (durable store, CAS group claims, lease
+      recovery, FFA_4 and TEAM_2V2; bands apply to RANKED_1V1 only).
+- [ ] Anti-smurf/collusion signals. (Deliberately not invented: teammate trade and
+      auction collusion in TEAM_2V2 is the obvious candidate, and the simulation
+      baseline is the evidence that should drive the rule, not the other way round.)
+- [ ] Party/duo queueing — TEAM_2V2 teams are formed by the matcher, not chosen.
+- [ ] A rating band for `TEAM_2V2`, and a ranked 2v2 queue. Currently four
+      players of any rating can be grouped; a ranked variant needs its own queue.
 - [x] Leaderboards and rank badges (tiers Bronze→Grandmaster).
 - [x] Ranked fairness: no pay-to-win modifiers (ratings reflect results only; traits cosmetic).
 
@@ -174,10 +188,21 @@ LAST_REMOTE_VERIFIED_COMMIT = none
       that fails loud, and inert/mock adapters for the future provider set (docs/AUTH.md).
 - [x] 2v2 team economics specified with open product decisions (docs/DESIGN/TEAM_2V2.md);
       implementation deliberately deferred until those are answered.
+- [x] D1-D5 OWNER-RESOLVED and implemented as ruleset `team-v1` (docs/DESIGN/TEAM_2V2.md).
 - [x] Postgres SQL verified against a real engine (PGlite): schema, jsonb, both unique
       constraints, rollback atomicity, and EXPLAIN-confirmed index use on the suffix read.
 - [x] Snapshot suffix off-by-one fixed — it was silently forcing every Postgres rebuild
-      down the full-replay path (docs/PERSISTENCE.md).
+      down the full-replay path (docs/PERSISTENCE.md, ADR-002).
+- [x] Determinism oracle before any performance work (ADR-001): 19 fixtures, canonical
+      fingerprint, independent invariants, goldens enforced by `npm run verify`.
+- [x] O(n^2) clone eliminated by separating the append-only log from the per-command
+      clone; 20x measured, equivalence proved by differential execution + 19 goldens.
+- [x] Restore robustness: a bankrupt seat or a dead match no longer wedges a recovered
+      match (`normalizeSeat` on the store rebuild path).
+- [x] TEAM_2V2 wired through matchmaking (group formation + deterministic teams) and
+      ranked ingestion (four individual results, no shared pool).
+- [x] FFA_4 vs TEAM_2V2 simulation baseline recorded, with its limits stated
+      (docs/simulation/TEAM_2V2_BASELINE.md).
 - [x] Replay tamper-evidence documented precisely (docs/REPLAY.md).
 - [x] Optional replay signing via a pluggable `ReplaySigner`; off by default, no key committed.
 - [x] Simulated dispute workflow bound to filed replay hashes (revalidate + audit trail).
@@ -193,6 +218,10 @@ LAST_REMOTE_VERIFIED_COMMIT = none
 
 - [x] Headless economy simulator (`npm run simulate`, seeded, aggregate output).
 - [x] Performance baseline + scaling risks (docs/PERFORMANCE.md).
+- [x] Mode-comparison simulator (FFA_4 vs TEAM_2V2, paired seeds,
+      docs/simulation/TEAM_2V2_BASELINE.md). Baseline only — nothing tuned from it.
+- [ ] Bot trading. The bots never trade, so teammate-trade behaviour is covered by
+      unit tests but not by simulation. Highest-value next simulation work.
 - [ ] Multi-agent economy simulator with large virtual populations (10k+ games).
 - [ ] Treasury solvency modelling.
 - [ ] Reward inflation/sink analysis.

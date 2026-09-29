@@ -12,6 +12,8 @@ Commands: `node scripts/bench.mjs`, `node scripts/profile-engine.mjs`
 | Rebuild (snapshot + suffix, cache cleared) | 20 rebuilds, 1 match | 266 ms (≈13 ms/rebuild, was ≈161 ms) |
 | FileBackend recovery after restart | 1 match | 24 ms (was 558 ms) |
 | Replay export (hash chain) | 754 events | 38 ms |
+| **Full match play (20 bot matches, 6,877 cmds)** | 20 games | **467 ms** (was 9,371 ms) |
+| **Per-command cost** | — | **0.068 ms** (was 1.363 ms) |
 | Postgres suffix read (real engine) | 5 matches × 5,000 commands | 23.3 ms vs 143.1 ms full read |
 
 ### Postgres suffix read, measured against a real PostgreSQL engine
@@ -63,62 +65,83 @@ issues a real indexed `WHERE matchId = ? AND seq > ?` range query; that path is
 
 ## Observed scaling risks
 
-1. **~~Write-through clone dominated match play~~ — partially fixed.**
+1. **~~Write-through clone dominated match play~~ — fixed (LL-P17 + fifth pass).**
    `MemoryBackend.save` no longer deep-clones the whole record per command
    (it stores the caller's reference; reads still clone, so callers cannot
    mutate stored state). Match play dropped 142 s → 93 s for 50 games.
-   The remaining per-command cost is the engine's own `structuredClone` in
-   `applyCommand` plus bot decisioning, which is inherent to a pure
-   event-sourced design. `PostgresBackend` avoids it entirely by writing one
-   row per command.
 
-   Measured breakdown (20 bot-vs-bot matches, `node scripts/profile-engine.mjs`):
+   Profiling then showed the remaining cost was **not** where the doc claimed.
+   Measured with `scripts/profile-engine.mjs` (20 bot-vs-bot matches):
 
-   | Phase | Share |
+   | Phase | Share (before) |
    |---|---|
    | `applyCommand` (clone + rules) | **99.1%** |
    | AI decisioning | 0.7% |
    | driver overhead | 0.2% |
 
-   So the earlier note attributing cost to "clone **plus** bot decisioning" was
-   wrong about the split: decisioning is noise. The cost is the clone alone.
+   So the split was clone alone, not "clone plus decisioning". **That is now
+   fixed** — see "The O(n²) clone" below.
 
-### Why the clone is not a constant: log length drives it
+### The O(n²) clone: cause, fix, and proof
 
-`applyCommand` opens with `structuredClone(original)` (`engine.ts:415`), and
-`original.log` grows by roughly 1.5 events per command. The clone therefore
-copies an ever-growing array on every single command — a match is O(n²) in
-commands, not O(n). Measured on one seeded match, extended to increasing
-lengths:
+`applyCommand` opened with `structuredClone(original)`, and `original.log` grows
+by roughly 1.5 events per command. The clone therefore copied an ever-growing
+array on every command, so a match was O(n²) in commands for a field **no rule
+consults**. Grepping the engine found exactly one reference to `state.log`
+outside the rules: `pushEvent`'s own push. The only external readers are
+`eventsSince` and the replay export, both read-only projections.
 
-| `log` length | commands replayed | `applyCommand` ms/cmd | full replay ms |
+**Fix** (`packages/game-engine/src/clone.ts`): copy only the containers a command
+can mutate — players, properties, trades (with their `propertyIds` arrays),
+auction (bids, `passedPlayerIds`, `highestBid`). The log *array* is still copied,
+so a consumer pushing to `state.log` cannot reach into a previous revision; the
+elements are shared because `pushEvent` constructs a new object per event and
+never edits one.
+
+#### Per-command clone cost, by log length
+
+`node scripts/profile-clone.mjs`:
+
+| events | `structuredClone` | targeted clone | speedup |
 |---|---|---|---|
-| 53 | 26 | 0.35 | 4.2 |
-| 200 | 100 | 0.76 | 43.0 |
-| 801 | 396 | 2.79 | 536.2 |
-| 2000 | 983 | 6.66 | 3,131.1 |
+| 200 | 0.6061 ms | 0.0071 ms | 86× |
+| 800 | 2.3622 ms | 0.0060 ms | 392× |
+| 2001 | 6.2496 ms | 0.0096 ms | 654× |
 
-The per-command cost scales linearly with log length, and replay cost scales
-quadratically. Isolating it: at `log` = 770, `structuredClone` of the full
-state is 2.28 ms while the same state with `log` emptied is 0.068 ms — a
-**33× difference for the log alone**, with the rules doing the rest.
+**Growth over that range: `structuredClone` 8×, targeted clone 1×.** That is the
+actual fix — the cost is now flat in log length instead of linear.
 
-This is a real design limit, not a tuning miss, and it has not been fixed:
+#### Whole-batch before/after
 
-- the purity of `applyCommand` is what makes seeded replay verifiable, so the
-  clone cannot simply be removed;
-- the event log is append-only and never read by the rules, so it is the one
-  field that could be shared by reference across states — but that would make
-  the returned state alias the input's log, and any consumer that mutates
-  `state.log` would corrupt a prior revision. That is a correctness change, not
-  an optimisation, and it needs a determinism test over a long match first.
+20 bot matches, 6,877 commands, identical seeds and policy:
 
-Until then the honest mitigation is the one already in place: **keep
-snapshots**. A snapshot short-circuits the quadratic path on rebuild, and
-`PostgresBackend` avoids it on the write side entirely by storing one row per
-command. That second claim is now measurable: against a real engine, fetching
-the 10% tail of a 5,000-command match costs 23.3 ms against 143.1 ms for the
-whole log.
+| | before | after |
+|---|---|---|
+| total | 9,371 ms | **467 ms** |
+| per command | 1.363 ms | **0.068 ms** |
+| median game | 354 ms | **19 ms** |
+| `applyCommand` share | 99.1% | 78.6% |
+| AI decisioning share | 0.7% | 17.5% |
+
+**20× faster.** The profile shift is honest and worth recording: the clone was
+the cost, it is now a small constant, and what remains is the rules themselves
+plus the bot.
+
+#### Why this is provable rather than hopeful
+
+Equivalence is asserted two ways, both of which had to hold *before* merging:
+
+1. **Differential execution** (`test/clone-equivalence.test.ts`). Every oracle
+   fixture plus a long seam-free bot match is replayed through the old
+   `structuredClone` cloner and the new one; the resulting states must be
+   identical field for field, events included. Alternating cloners mid-stream
+   must also match both all-deep and all-fast runs.
+2. **Golden fingerprints** captured *before* the change. All 19 still match,
+   and `npm run oracle:check` runs in `npm run verify`.
+
+A hash comparison alone would have been weaker: it could not distinguish
+"equivalent" from "different but not yet noticed", and it would go stale the
+moment a field was added to `MatchState`. See [ADR-001](./adr/ADR-001-determinism-oracle.md).
 
 2. **FileBackend still rewrites the entire record per command** — O(commands²)
    bytes on disk. Local durability stand-in only, not a production store.

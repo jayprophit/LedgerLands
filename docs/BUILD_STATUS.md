@@ -99,14 +99,17 @@ VERIFIED = implementation + typecheck + lint-ish + tests + build + run/smoke.
 | LL-P15 Marketplace sandbox | `packages/marketplace` — LIST/CANCEL/BUY, escrow-routed atomic legs, idempotency, compensation | 3/3 + API integration |
 | LL-P16 Perf | `scripts/bench.mjs` + `docs/PERFORMANCE.md` | 8 probes recorded |
 
-Totals: **206 tests PASS** (1 skipped: networked-Postgres race) + **3/3 E2E**.
-Breakdown: game-engine 27 · match-store 52 · tournaments 36 · marketplace 21 ·
-auth 19 · matchmaking 15 · api 16 · blockchain 10 · ranked 4 · ledger 3 ·
+Totals: **413 tests PASS** (2 skipped) + **3/3 E2E**.
+Breakdown: game-engine 201 · match-store 68 · tournaments 36 · marketplace 21 ·
+matchmaking 27 · auth 19 · api 16 · blockchain 10 · ranked 9 · ledger 3 ·
 game-ai 3.
 
 Reproduce with `node scripts/test-totals.mjs` (it runs each workspace suite and
-sums the vitest summaries). Prior reports of "178" were a miscount — the
-breakdown never matched the stated total.
+sums the vitest summaries). Earlier reports of "178" and "206" were miscounts
+against their own breakdowns; the numbers above are the machine-read total.
+
+Skipped: the `DATABASE_URL` live-Postgres race (no server here) and the
+oracle-capture rewrite mode (only runs under `ORACLE_CAPTURE=1`).
 
 ### LL-P17 performance (applied this pass)
 
@@ -133,17 +136,37 @@ breakdown never matched the stated total.
 | Marketplace auctions | min increments, injected server clock, late bid still settleable, cancel is terminal | included above |
 | Marketplace bundles | all-or-nothing: pre-flight validation, transfer only after all legs | included above |
 | Auth hardening | `AuthService` (anti-replay session counters), `MfaService`, `ProductionGuard` (fails loud on dev-in-production), inert/mock adapters for the future provider set, server-side step-up endpoint | 19 auth tests (+16), 16 API tests (+1) |
-| Postgres verified on a real engine | PGlite (PostgreSQL/WASM) harness running the backend contract against real DDL, real constraints, real planner; fixed a suffix off-by-one that forced full replay | 12 match-store tests (+12) |
+| Postgres verified on a real engine | PGlite (PostgreSQL/WASM) harness running the backend contract against real DDL, real constraints, real planner; fixed a suffix off-by-one that forced full replay (ADR-002) | 12 match-store tests (+12) |
+| Snapshot boundary regression | every snapshot position, per-backend `afterSeq` semantics, and the memory/file asymmetry documented rather than assumed away (ADR-002) | 16 match-store tests (+16) |
+
+## Fifth pass (ledgerlands4.txt)
+
+Owner priority: networked Postgres → concurrency/recovery verification → engine
+determinism → safe clone/log performance → 2v2. Postgres was unavailable, so the
+blocker is recorded and the independent work proceeded.
+
+| Requirement | Implementation | Tests |
+|---|---|---|
+| Determinism oracle | `test/oracle/` — canonical fingerprint, 20 independent invariants, 19 mechanics fixtures, golden fingerprints checked by `npm run verify` (ADR-001) | game-engine 27 → 144 |
+| State/history separation | `clone.ts` copies only mutable containers; log shared by pointer; no rule reads the log (verified by grep) | 23 differential-equivalence tests |
+| Clone perf | 20× on a full batch; per-command cost now flat in log length instead of linear | measured, see `docs/PERFORMANCE.md` |
+| TEAM_2V2 rules D1–D5 | `teams.ts` + `team-v1`: teammate rent exempt (recorded), individual bankruptcy, last solvent team wins, individual auctions/trades, full starting balance | 34 matrix tests |
+| Alternating-team seating | `seatAlternatingTeams` + `validateTeams`; seat order is authoritative state | included above |
+| Restore robustness | `normalizeSeat` — a bankrupt seat or a dead match no longer wedges a recovered match | included above |
+| 2v2 matchmaking | `TEAM_2V2` in the supported set and tick loop; `formTwoVTwoTeams`; `MatchFactory` receives `teams` | matchmaking 15 → 27 |
+| 2v2 ranked ingestion | team win → four individual results; no shared pool; eliminated players keep a blank rating | ranked 4 → 9 |
+| 2v2 simulation baseline | `scripts/simulate-teams.mjs`, 200 paired games per mode, FFA_4 vs TEAM_2V2 | see `docs/simulation/` |
 
 ## Known issues (current)
 
-1. **Postgres concurrency interleaving is still unverified** — no networked
-   server in this environment. Everything that does not need two connections is
-   now verified against a **real PostgreSQL engine** (PGlite, WASM): schema
-   validity, `jsonb` storage, both unique constraints, transactional rollback,
-   and an `EXPLAIN` proving the suffix range query uses
-   `MatchCommand_matchId_seq_idx`. PGlite serializes transactions, so only the
-   race itself remains. See `docs/PERSISTENCE.md`.
+1. **`NETWORKED_POSTGRES_BLOCKED`** — no server in this environment (ports
+   5432/5433/5434/15432 closed, no Postgres service, Docker daemon down,
+   `DATABASE_URL` unset). `POSTGRES_SEMANTICS_VERIFIED_PGLITE` is what we can
+   honestly claim: schema validity, `jsonb` storage, both unique constraints,
+   transactional rollback, and an `EXPLAIN` proving the suffix range query uses
+   `MatchCommand_matchId_seq_idx`. PGlite is single-connection and serializes
+   transactions, so **concurrent-writer interleaving is still unverified** — that
+   is the one thing the `DATABASE_URL` test exists to close. See ADR-002.
 2. **Postgres partial I/O is measured, not assumed** — 23.3 ms for a 500-row
    suffix vs 143.1 ms for a 5,000-row full read, on 25,000 rows, with the
    planner choosing a bitmap index scan. Reproduce with
@@ -151,14 +174,11 @@ breakdown never matched the stated total.
 3. **FileBackend still has no partial physical I/O** (single JSON document per
    match). Logical suffix selection only; a segmented format needs versioning +
    migration, so compatibility was kept. See `docs/PERSISTENCE.md`.
-4. **A full match is O(n²) in commands**, measured not guessed: `applyCommand`
-   opens with `structuredClone` and the event log grows every command, so
-   per-command cost scales linearly with log length (0.35 ms at 53 events,
-   6.66 ms at 2000). Profiling attributes **99.1%** of match time to that
-   clone and only 0.7% to AI decisioning. Snapshots short-circuit it on
-   rebuild; `PostgresBackend` avoids it on write. Fixing it properly means
-   sharing the append-only log by reference, which is a correctness change
-   needing a long-match determinism test first. See `docs/PERFORMANCE.md`.
+4. **The O(n²) clone is fixed, not mitigated** — 20× on a full batch, and
+   per-command cost is now flat in log length. Equivalence is proved by
+   differential execution plus 19 unchanged goldens (ADR-001). Remaining engine
+   cost is the rules themselves: `applyCommand` is 78.6% of match time and AI
+   decisioning is 17.5%. See `docs/PERFORMANCE.md`.
 5. Replay signing and the dispute workflow are **implemented but inert by
    default** (`docs/REPLAY.md`): the dispute service is simulated and
    `DisputeService` has no real admin identity provider behind it.
@@ -167,10 +187,12 @@ breakdown never matched the stated total.
    no KYC/age verification, and no TOTP/WebAuthn verification ceremony. Dispute
    resolution remains simulated (role string, no identity provider) and replay
    signing is off by default.
-8. 2v2 team economics are **specified but not implemented**; five product
-   decisions are open in `docs/DESIGN/TEAM_2V2.md` (rent attribution, team
-   bankruptcy, win condition, auctions/trades, starting balances). No engine
-   change has been made.
+8. **2v2 is implemented but not balanced, and two of its rules are untested by
+   simulation**: the bots never trade and auctions are near-degenerate (≈1.0
+   bids each), so D4's teammate-trade and teammate-auction decisions rest on unit
+   tests alone. There is no party/duo queueing, no rating band for `TEAM_2V2`,
+   and no tournament format for team rounds. See
+   `docs/DESIGN/TEAM_2V2.md` and `docs/simulation/TEAM_2V2_BASELINE.md`.
 9. Marketplace state is in-memory; no listing/offer/auction persistence, and no
    anti-sniping extension on auctions.
 10. `npm audit`: 0 production advisories; 4 high dev-only (documented, not

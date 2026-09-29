@@ -21,6 +21,43 @@ ephemeral coordination layer (presence, leases, worker wakeups). Nothing in this
 package treats Redis as authoritative, and local development needs no
 infrastructure at all.
 
+## Queues
+
+| Queue | Group size | Skill band | Teams passed to the match factory |
+|---|---|---|---|
+| `CASUAL_1V1` | 2 | no | `[]` |
+| `RANKED_1V1` | 2 | **yes** | `[]` |
+| `FFA_4` | 4 | no | `[]` |
+| `TEAM_2V2` | 4 | no | two teams |
+| `TOURNAMENT` | — | — | not a matchmaking queue; served by `Tournaments` |
+
+`MatchFactory` receives `teams`, **empty for every non-team queue**, so a caller
+cannot mistake a 1v1 for a team match.
+
+### TEAM_2V2 grouping
+
+`formTwoVTwoTeams` splits a matched group of four deterministically, taking
+alternating entries as each team's first member:
+
+```ts
+[{ teamId: "red",  memberIds: [group[0], group[2]] },
+ { teamId: "blue", memberIds: [group[1], group[3]] }]
+```
+
+The group arrives in rating-compatible order, so the two strongest candidates end
+up on **opposing** teams — the fairer default when no party is queued. The engine
+then seats them **A1 B1 A2 B2**, so no two consecutive turns belong to a team.
+
+Two known limitations, deliberately not solved by guessing:
+
+1. **No party/duo queueing.** You cannot queue with a specific partner; the
+   matcher assigns teams.
+2. **No skill band for `TEAM_2V2`.** `compatible()` applies bands to
+   `RANKED_1V1` only, so four players of any rating can be grouped. The
+   directive declines to invent fair-play restrictions without evidence, so this
+   is the current deliberate state — but a ranked 2v2 needs its **own queue**
+   rather than a silent change to this one.
+
 ## Explicit states
 
 Never a set of booleans — one mutually exclusive `status`:
