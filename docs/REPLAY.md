@@ -57,14 +57,61 @@ seed + rulesetVersion + boardVersion + commands
 `packages/match-store/test/store.test.ts` assert state equality after a
 simulated process restart.
 
+## Manifests and optional signing
+
+The chain hash binds the *events*. A **manifest** binds the chain to the match's
+identity, and an optional signature binds the manifest to a key.
+
+```
+manifestHash = sha256(exportVersion, matchId, boardVersion, rulesetVersion,
+                      seed, eventCount, firstHash, finalHash, settlement)
+signature    = sign(manifestHash)
+```
+
+`issuedAt` is deliberately **excluded** from the hash, so a manifest is
+content-addressed: two independent exports of the same match always produce the
+same `manifestHash`, which is what makes filed evidence comparable. Verification
+recomputes the digest, so editing any bound field invalidates the signature.
+
+`ReplaySigner` has three implementations:
+
+| Signer | Use | What it proves |
+|---|---|---|
+| `Ed25519Signer` | real attribution (asymmetric) | which key signed this manifest |
+| `HmacDevSigner` | local development only | nothing about *which* server (symmetric) |
+| `UnsignedManifest` | default when no key is configured | nothing; the manifest is untrusted evidence |
+
+Configure the real signer with `LEDGERLANDS_REPLAY_SIGNER_KEY` (base64 PKCS#8).
+**No private key is committed to this repository.** The default is
+`UnsignedManifest`, so a missing key cannot silently produce something that
+looks signed.
+
+## Dispute workflow
+
+`DisputeService` (simulated) implements:
+
+```
+OPEN → UNDER_REVIEW → RESOLVED | REJECTED
+OPEN → CANCELLED
+```
+
+A dispute records the reporter, category, reason, the `replayFinalHash` and
+`replayManifestHash` **as filed**, the export version, the evidence bundle
+(manifest + signature + events), and an append-only `history`. `revalidate()`
+re-verifies filed evidence against a signer and checks it still matches the
+hashes captured at open time.
+
+This is a simulated workflow: the resolver is a role string with no identity
+provider behind it, and a resolved dispute records a decision **without
+automatically re-settling a match**.
+
 ## Current gaps (honest list)
 
-1. **No server signature.** `chainHash` is unkeyed. A production design signs
-   the export with a per-match key so a verifier can attribute the log to a
-   server instance.
-2. **Snapshots are stored but not used to shorten replay** (see
-   `docs/PERFORMANCE.md` risk 3).
-3. **No dispute workflow** (claim, review, resolution, admin audit trail) —
-   the Prisma `AuditLog` model exists but the service does not.
+1. **Signing is optional and off by default** — the real signer needs a managed
+   key; production key management is a later security milestone.
+2. **Snapshots accelerate replay** (see `docs/PERSISTENCE.md`); a Postgres
+   suffix read is implemented but unproven without a live DB.
+3. **The dispute workflow is simulated** — no admin identity provider, no
+   automatic correction, no notification path.
 4. **Command actor is recorded, not authenticated at export time**; the
    dev auth adapter is explicitly not an authorization boundary.

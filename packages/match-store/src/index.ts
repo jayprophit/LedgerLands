@@ -21,6 +21,8 @@ import {
 
 export * from "./storage.js";
 export * from "./postgres.js";
+export * from "./replay-manifest.js";
+export * from "./disputes.js";
 
 export interface CreateParams {
   playerName: string;

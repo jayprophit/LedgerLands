@@ -2,7 +2,22 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { GameCommand } from "@ledgerlands/shared-types";
 import { BOARD_VERSION, DEFAULT_BOARD, GameRuleError, RULESET_VERSION } from "@ledgerlands/game-engine";
-import { ConcurrencyError, MemoryBackend, PersistentMatchStore, type StorageBackend } from "@ledgerlands/match-store";
+import {
+  buildManifest,
+  ConcurrencyError,
+  DisputeError,
+  DisputeService,
+  Ed25519Signer,
+  firstChainHash,
+  MemoryBackend,
+  PersistentMatchStore,
+  signReplay,
+  SigningError,
+  UnsignedManifest,
+  type DisputeStatus,
+  type ReplaySigner,
+  type StorageBackend,
+} from "@ledgerlands/match-store";
 import { DevAuthAdapter, type AuthPrincipal } from "@ledgerlands/auth";
 import { MarketplaceService, MarketplaceError, type MarketplaceAssetKind } from "@ledgerlands/marketplace";
 import { DoubleEntryLedger } from "@ledgerlands/ledger";
@@ -163,6 +178,120 @@ export function buildApp(opts?: { backend?: StorageBackend; persistence?: string
     } catch (error) {
       return ruleError(reply, error);
     }
+  });
+
+  // ---- Replay manifests + dispute workflow (simulated) ----
+  // Signing is optional and pluggable; an unsigned manifest is still produced so
+  // dispute filing never depends on key management being ready.
+  const replaySigner: ReplaySigner = process.env.LEDGERLANDS_REPLAY_SIGNER_KEY
+    ? Ed25519Signer.fromPrivateKeyBase64("server-1", process.env.LEDGERLANDS_REPLAY_SIGNER_KEY)
+    : new UnsignedManifest();
+  const disputes = new DisputeService();
+
+  /**
+   * Build a manifest from a replay export. `issuedAt` is wall-clock and is NOT
+   * part of the hash, so the manifest is content-addressed: two independent
+   * exports of the same match always produce the same `manifestHash`, which is
+   * what makes filed evidence comparable.
+   */
+  const manifestFor = async (matchId: string) => {
+    const replay = await store.exportReplay(matchId);
+    return {
+      replay,
+      manifest: buildManifest({
+        matchId: replay.matchId,
+        boardVersion: replay.boardVersion,
+        rulesetVersion: replay.rulesetVersion,
+        seed: replay.seed,
+        eventCount: replay.events.length,
+        firstHash: firstChainHash(JSON.stringify(replay.events[0] ?? {})),
+        finalHash: replay.chainHash,
+        settlement: replay.settlement,
+      }),
+    };
+  };
+
+  app.get<{ Params: { id: string } }>("/api/matches/:id/replay/manifest", async (request, reply) => {
+    try {
+      const { replay, manifest } = await manifestFor(request.params.id);
+      const signed = await signReplay(replaySigner, manifest);
+      return { signed, events: replay.events };
+    } catch (error) {
+      return ruleError(reply, error);
+    }
+  });
+
+  app.post<{
+    Body: { matchId?: string; reporter?: string; category?: string; reason?: string };
+  }>("/api/disputes", async (request, reply) => {
+    try {
+      const body = request.body ?? {};
+      if (!body.matchId || !body.reporter || !body.category || !body.reason) {
+        return reply.code(400).send({ error: "matchId, reporter, category and reason are required" });
+      }
+      const { replay, manifest } = await manifestFor(body.matchId);
+      const signed = await signReplay(replaySigner, manifest);
+      const dispute = disputes.open({
+        matchId: body.matchId,
+        reporter: body.reporter,
+        category: body.category as Parameters<typeof disputes.open>[0]["category"],
+        reason: body.reason,
+        signed,
+        events: replay.events.map((e) => ({ type: e.type, atRevision: e.atRevision })),
+      });
+      return reply.code(201).send({ dispute });
+    } catch (error) {
+      return ruleError(reply, error);
+    }
+  });
+
+  app.get("/api/disputes", async (request) => {
+    const q = request.query as { matchId?: string; status?: DisputeStatus };
+    return {
+      disputes: disputes.list({
+        ...(q.matchId ? { matchId: q.matchId } : {}),
+        ...(q.status ? { status: q.status } : {}),
+      }),
+    };
+  });
+
+  app.post<{ Params: { id: string }; Body: { reviewer?: string } }>("/api/disputes/:id/claim", async (request, reply) => {
+    if (!request.body?.reviewer) return reply.code(400).send({ error: "reviewer is required" });
+    try {
+      return { dispute: disputes.claim(request.params.id, request.body.reviewer) };
+    } catch (error) {
+      return ruleError(reply, error);
+    }
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: { reviewer?: string; outcome?: "UPHELD" | "DENIED" | "PARTIAL"; note?: string; correctiveAction?: string };
+  }>("/api/disputes/:id/resolve", async (request, reply) => {
+    const body = request.body ?? {};
+    if (!body.reviewer || !body.outcome || !body.note) {
+      return reply.code(400).send({ error: "reviewer, outcome and note are required" });
+    }
+    try {
+      return {
+        dispute: disputes.resolve(
+          request.params.id,
+          body.reviewer,
+          body.outcome,
+          body.note,
+          Date.now(),
+          body.correctiveAction,
+        ),
+      };
+    } catch (error) {
+      return ruleError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/disputes/:id", async (request, reply) => {
+    const d = disputes.get(request.params.id);
+    if (!d) return reply.code(404).send({ error: "dispute not found" });
+    return { dispute: d };
   });
 
   app.get<{ Params: { id: string }; Querystring: { token?: string } }>(
@@ -487,6 +616,12 @@ function ruleError(reply: any, error: unknown) {
   }
   if (error instanceof ConcurrencyError) {
     return reply.code(409).send({ error: error.code, message: `${error.message} Reload and retry.` });
+  }
+  if (error instanceof DisputeError) {
+    return reply.code(409).send({ error: error.code, message: error.message });
+  }
+  if (error instanceof SigningError) {
+    return reply.code(500).send({ error: error.code, message: error.message });
   }
   // eslint-disable-next-line no-console
   console.error(error);

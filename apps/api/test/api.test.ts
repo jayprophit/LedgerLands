@@ -245,6 +245,53 @@ describe("API integration", () => {
     expect(l2.removed).toBe(1);
   });
 
+  it("files and resolves a dispute bound to a replay manifest", async () => {
+    const created = await post("/api/matches", { playerName: "Disputer", seed: 21 }, 201);
+    const matchId = created.match.id;
+    await post(`/api/matches/${matchId}/command`, {
+      playerId: created.playerId,
+      command: { type: "ROLL_DICE" },
+      commandId: "dsp-roll",
+    });
+
+    // Manifest is produced from the same replay data as the export.
+    const manifestRes = await app.inject({ method: "GET", url: `/api/matches/${matchId}/replay/manifest` });
+    expect(manifestRes.statusCode).toBe(200);
+    const manifestBody = manifestRes.json() as any;
+    expect(manifestBody.signed.manifest.matchId).toBe(matchId);
+    expect(manifestBody.signed.manifest.manifestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(manifestBody.signed.manifest.eventCount).toBe(manifestBody.events.length);
+
+    const filed = await post(
+      "/api/disputes",
+      { matchId, reporter: created.playerId, category: "RIGGED_MATCH", reason: "dice looked wrong" },
+      201,
+    );
+    expect(filed.dispute.status).toBe("OPEN");
+    expect(filed.dispute.replayManifestHash).toBe(manifestBody.signed.manifest.manifestHash);
+    expect(filed.dispute.replayFinalHash).toBe(manifestBody.signed.manifest.finalHash);
+    // Duplicate open claim is rejected.
+    const dup = await app.inject({
+      method: "POST",
+      url: "/api/disputes",
+      payload: { matchId, reporter: created.playerId, category: "OTHER", reason: "again" },
+    });
+    expect(dup.statusCode).toBe(409);
+
+    const claimed = await post(`/api/disputes/${filed.dispute.disputeId}/claim`, { reviewer: "mod-1" });
+    expect(claimed.dispute.status).toBe("UNDER_REVIEW");
+    const resolved = await post(`/api/disputes/${filed.dispute.disputeId}/resolve`, {
+      reviewer: "mod-1",
+      outcome: "DENIED",
+      note: "no anomaly found",
+    });
+    expect(resolved.dispute.status).toBe("REJECTED");
+    expect(resolved.dispute.history.map((h: { to: string }) => h.to)).toEqual(["OPEN", "UNDER_REVIEW", "REJECTED"]);
+
+    const list = await app.inject({ method: "GET", url: `/api/disputes?matchId=${matchId}` });
+    expect((list.json() as any).disputes).toHaveLength(1);
+  });
+
   it("settles a sandbox marketplace purchase", async () => {
     await post("/api/marketplace/faucet", { accountId: "shopper", amount: 2000 });
     await post("/api/marketplace/mint", { kind: "cosmetic", assetId: "neon-dice", ownerId: "vendor" });
