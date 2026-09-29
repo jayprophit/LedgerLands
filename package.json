@@ -24,7 +24,8 @@
     "simulate": "node scripts/simulate.mjs",
     "smoke": "node scripts/smoke.mjs",
     "engine:smoke": "node scripts/engine-smoke.mjs",
-    "verify": "npm run typecheck && npm test && npm run build && npm run oracle:check -w @ledgerlands/game-engine"
+    "verify": "npm run typecheck && npm test && npm run build && npm run oracle:check -w @ledgerlands/game-engine && npm run smoke:api",
+    "smoke:api": "node scripts/smoke-api.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
