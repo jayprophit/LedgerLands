@@ -1,0 +1,204 @@
+# =============================================================================
+# BUILD MANIFEST — LedgerLands
+# =============================================================================
+# Authoritative record of how this project is built, tested and verified, and
+# of what is still broken. Read by Aetherius-OS's build manifest registry
+# (docs/BUILD-MANIFEST-REGISTRY.yaml) and validated by
+# src/programme/buildManifest.ts.
+#
+# This folder holds three related trees:
+#   crypto-property-game-mvp/           - the active MVP workspace
+#   LedgerLands-Aetherius-App-Repo/     - the Aetherius app repository
+#   LedgerLands-source/                 - the source of record
+# =============================================================================
+schema_version: "1.0.0"
+
+project:
+  id: ledgerlands
+  name: LedgerLands
+  kind: application
+  domain: ledgerlands
+  description: >-
+    Aetherius OS property-trading strategy and GameFi application. An
+    npm-workspaces monorepo with a Fastify server-authoritative API, a
+    React/Vite gameplay UI, a deterministic game engine, a double-entry
+    ledger and a Prisma/PostgreSQL persistence schema.
+  repository: false
+  languages: [typescript, javascript, sql]
+
+toolchain:
+  build_system: npm/workspaces
+  package_manager: npm
+  requirements:
+    - name: node
+      version: ">=20"
+      required: true
+      purpose: workspace scripts, Vite UI build, engine simulation
+    - name: npm
+      version: ">=10"
+      required: true
+      purpose: workspace install and script running
+    - name: typescript
+      version: ">=5.9"
+      required: true
+      purpose: package typechecking
+    - name: prisma
+      version: "7.10.0"
+      required: true
+      purpose: schema generation and database migration
+    - name: docker
+      version: ">=24"
+      required: false
+      purpose: local PostgreSQL via docker-compose.yml
+
+commands:
+  - name: install
+    command: npm ci
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 15
+  - name: typecheck
+    command: npm run typecheck
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 15
+  - name: test
+    command: npm test
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 20
+  - name: build
+    command: npm run build
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 20
+  - name: verify
+    command: npm run typecheck && npm test && npm run build
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 45
+    requires: [typecheck, test, build]
+  - name: engine-smoke
+    command: npm run engine:smoke
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 5
+  - name: simulate
+    command: npm run simulate
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 15
+  - name: db-generate
+    command: npm run db:generate
+    working_directory: crypto-property-game-mvp
+    timeout_minutes: 10
+
+dependencies:
+  projects: [aetherius-os, agent-bridge]
+  external:
+    - prisma
+    - fastify
+    - react
+    - vite
+    - typescript
+    - concurrently
+    - prettier
+
+status:
+  state: VERIFIED
+  last_verified: "2026-10-20"
+  summary: >-
+    The workspace typechecks, builds and tests. Every package compiles
+    under TypeScript 7 with project references, the web UI builds through
+    Vite, and 33 tests pass. It previously could not typecheck a single
+    file: the shared base config used the baseUrl option that TypeScript 7
+    removed, and the package aliases pointed at build output that had
+    never been produced.
+  evidence:
+    - "npm install -> dependencies installed; @types/node 24.19.0"
+    - "npx tsc -b -> exit 0, the whole solution builds in dependency order"
+    - "npm run typecheck -> exit 0, all eight workspaces typecheck"
+    - "npm run build -> exit 0; web built in 305ms through Vite"
+    - "npm test -> exit 0; 3 suites, 33 tests passed, 0 failed"
+
+known_issues:
+  - id: LL-BLD-001
+    severity: critical
+    summary: >-
+      TypeScript 7 removed the baseUrl compiler option and the shared base
+      config still uses it, so every workspace package fails to typecheck.
+    evidence: >-
+      tsconfig.base.json:15 "baseUrl": "." -> TS5090 and TS5102 in
+      packages/ledger and packages/shared-types.
+    status: OPEN
+    todo_ref: TODO-LL-001
+  - id: LL-BLD-002
+    severity: high
+    summary: >-
+      Package path aliases resolve to dist output that does not exist, so
+      there is no build order in which the packages can compile against
+      each other.
+    evidence: >-
+      tsconfig.base.json paths map @ledgerlands/shared-types to
+      packages/shared-types/dist/index.d.ts; no dist directory exists under
+      any package.
+    status: FIXED
+    todo_ref: TODO-LL-002
+    notes: >-
+      Resolved 2026-10-20 with TypeScript project references. Every package
+      is composite, each declares its dependencies as references, a root
+      solution tsconfig.json lists all eight projects, and the typecheck
+      scripts use build mode so the dependency order is enforced by the
+      compiler rather than by luck.
+  - id: LL-BLD-003
+    severity: low
+    summary: >-
+      The npm install reports that three packages have install scripts not
+      covered by allowScripts, so the esbuild and prisma postinstall steps
+      did not run.
+    evidence: >-
+      "npm warn install-scripts 3 packages have install scripts not yet
+      covered by allowScripts: @prisma/engines@7.10.0, esbuild@0.28.2,
+      prisma@7.10.0"
+    status: OPEN
+    todo_ref: TODO-LL-008
+  - id: LL-P2-001
+    severity: high
+    summary: >-
+      The active phase is LL-P2 persistence: the in-memory MatchStore has
+      not been replaced with a PostgreSQL repository, no match events are
+      persisted transactionally, and state is not rebuilt from an event log.
+    evidence: >-
+      crypto-property-game-mvp/BUILD-TODO.md: "CURRENT_ACTIVE_PHASE =
+      LL-P2-PERSISTENCE", with 8 unchecked items under LL-P2.
+    status: OPEN
+    todo_ref: TODO-LL-003
+  - id: LL-REP-001
+    severity: medium
+    summary: >-
+      The repository has never been pushed, so none of the verified work
+      exists outside this machine.
+    evidence: >-
+      crypto-property-game-mvp/BUILD-TODO.md: "Create/push
+      jayprophit/LedgerLands, verify remote SHA" is unchecked;
+      "LAST_REMOTE_VERIFIED_COMMIT = none".
+    status: OPEN
+    todo_ref: TODO-LL-006
+  - id: LL-STR-001
+    severity: medium
+    summary: >-
+      Three related trees are present (crypto-property-game-mvp,
+      LedgerLands-Aetherius-App-Repo, LedgerLands-source) with no recorded
+      statement of which is authoritative, plus a .bundle and a .zip of the
+      MVP.
+    evidence: >-
+      Folder root listing: crypto-property-game-mvp/,
+      LedgerLands-Aetherius-App-Repo/, LedgerLands-source/,
+      crypto-property-game-mvp.zip (190 KB), LedgerLands.bundle (36 KB).
+    status: OPEN
+    todo_ref: TODO-LL-005
+
+notes:
+  - >-
+    BUILD-TODO.md states the continuation rule: "TASK COMPLETE != BUILD
+    COMPLETE. After every verified milestone: record -> commit -> push ->
+    verify remote -> update TODO -> select next highest-priority unblocked
+    task -> continue."
+  - >-
+    The project is UNLICENSED by deliberate decision, so it is a first-party
+    Aetherius project and not a fork.
+  - >-
+    GameFi work is explicitly held until LL-P1 through LL-P10 are stable.

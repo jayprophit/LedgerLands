@@ -21,3 +21,7 @@ playwright-report/
 blob-report/
 .playwright/
 .match-data/
+# The other copies of this project and the repository's own
+# bundle. They are history, not source, and they are kept
+# beside the repository rather than inside it.
+history/
